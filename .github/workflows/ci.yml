@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev,examples]"
+      - name: Lint
+        run: |
+          black --check src tests examples
+          flake8 --max-line-length=100 --extend-ignore=E203,W503 src tests examples
+      - name: Type-check
+        run: mypy src
+      - name: Test
+        run: pytest -q
+      - name: Build
+        run: |
+          pip install build
+          python -m build
