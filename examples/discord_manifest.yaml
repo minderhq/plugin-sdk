@@ -1,0 +1,23 @@
+# A manifest plugin: declarative webhook → store-vector ingestion, no code.
+# Validate with:  minder-plugin validate examples/discord_manifest.yaml
+apiVersion: minder.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: discord-ingestor
+  version: 0.1.0
+  description: Ingest Discord messages to Qdrant
+spec:
+  trigger:
+    type: webhook
+    webhook:
+      path: /discord/webhook
+      secretRef: discord.webhook.secret
+  action:
+    type: store-vector
+    store:
+      collection: discord-messages
+      input:
+        text: "{{ .content }}"
+        metadata:
+          author: "{{ .author.username }}"
+          timestamp: "{{ .timestamp }}"

@@ -8,9 +8,17 @@ a plugin **declares the capabilities it implements** (explicitly via a
 those. The vocabulary is **open**: an unknown capability is ignored, never fatal.
 """
 
-from typing import Any, FrozenSet, Set
+from typing import Any, Dict, FrozenSet, List, Protocol, Set, runtime_checkable
 
-__all__ = ["KNOWN_CAPABILITIES", "capabilities"]
+__all__ = [
+    "KNOWN_CAPABILITIES",
+    "capabilities",
+    "DataSource",
+    "Scheduler",
+    "WebhookHandler",
+    "ConnectionProvider",
+    "UIPanelProvider",
+]
 
 # A non-exhaustive vocabulary — plugins MAY declare capabilities outside this set;
 # the platform ignores ones it doesn't understand (graceful degradation).
@@ -50,4 +58,62 @@ def capabilities(plugin: Any) -> Set[str]:
         caps.add("ai-tools")
     if getattr(plugin, "ACTIONS", None):
         caps.add("actions")
+    if _has(plugin, "handle_webhook"):
+        caps.add("webhook-ingest")
+    if _has(plugin, "schedule"):
+        caps.add("scheduler")
+    if _has(plugin, "connect"):
+        caps.add("connection")
+    if _has(plugin, "panels"):
+        caps.add("ui-panel")
     return caps
+
+
+# ── per-capability interfaces (type-check against the one you implement) ───────
+# These document the extra methods a plugin adds when it declares a capability
+# beyond the base lifecycle. Each is runtime_checkable and optional.
+
+
+@runtime_checkable
+class DataSource(Protocol):
+    """``data-source``: polled/manual collection driven by the registry."""
+
+    async def collect_data(self) -> Dict[str, Any]: ...
+
+    async def analyze(self) -> Dict[str, Any]: ...
+
+
+@runtime_checkable
+class Scheduler(Protocol):
+    """``scheduler``: the plugin declares its own cadence as a cron expression
+    instead of the default hourly loop."""
+
+    def schedule(self) -> str: ...
+
+
+@runtime_checkable
+class WebhookHandler(Protocol):
+    """``webhook-ingest``: handle an inbound webhook payload (returns a result to
+    store / acknowledge)."""
+
+    async def handle_webhook(self, payload: Dict[str, Any]) -> Dict[str, Any]: ...
+
+
+@runtime_checkable
+class ConnectionProvider(Protocol):
+    """``connection``: an external account/credential connection (e.g. OAuth)."""
+
+    async def connect(self, credentials: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    async def disconnect(self) -> None: ...
+
+    async def is_connected(self) -> bool: ...
+
+
+@runtime_checkable
+class UIPanelProvider(Protocol):
+    """``ui-panel``: contribute data-driven client surfaces. Returns panel
+    descriptors ({id, title, kind: table|chart|kv|timeline, dataAction}); the
+    trusted client renders them — the plugin never ships markup."""
+
+    def panels(self) -> List[Dict[str, Any]]: ...
