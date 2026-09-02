@@ -17,6 +17,7 @@ from .ai_tools import build_tool_definitions
 from .capabilities import capabilities
 from .harness import check_plugin
 from .manifest import validate_manifest
+from .requirements import requirements
 from .schema import resolve_config_schema
 
 _SCAFFOLD = '''"""{title} plugin."""
@@ -94,6 +95,7 @@ def _cmd_inspect(path: Path) -> int:
     schema, ui = resolve_config_schema(plugin)
     report = {
         "capabilities": sorted(capabilities(plugin)),
+        "requires": requirements(plugin),
         "config_schema": schema,
         "ui_schema": ui,
         "ai_tools": build_tool_definitions(plugin),

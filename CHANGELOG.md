@@ -11,8 +11,9 @@ Initial SDK.
 - `Plugin` Protocol + `PluginMetadata` (with `api_version`) — the lifecycle the
   registry drives; duck-typed on `register`.
 - Extension points: `CONFIG_SCHEMA`, `ACTIONS` / `READ_ONLY_ACTIONS`, `AI_TOOLS`,
-  `DISPLAY` (branding), and per-field UI presentation keys (`widget`,
-  `options_action`, `placeholder`, `rows`, `group`, …).
+  `DISPLAY` (branding), `REQUIRES` (services/bundles the plugin needs), and
+  per-field UI presentation keys (`widget`, `options_action`, `placeholder`,
+  `rows`, `group`, …).
 
 ### Extensibility (RFC 0001)
 - **Config as JSON Schema + UI Schema**: `resolve_config_schema`,
@@ -22,6 +23,9 @@ Initial SDK.
   protocols `DataSource` / `Scheduler` / `WebhookHandler` / `ConnectionProvider` /
   `UIPanelProvider`. Open vocabulary, graceful degradation.
 - Widget/format vocabularies (`WIDGETS`, `FORMATS`) — open, client-resolved.
+- **Requirements**: `requirements()` / `requirement_errors()` +
+  `KNOWN_SERVICES` / `KNOWN_BUNDLES` — a plugin declares the services and bundles
+  it needs; validated names catch typos.
 
 ### Toolkit
 - `PluginBase` convenience base class.

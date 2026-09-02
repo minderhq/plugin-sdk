@@ -55,6 +55,7 @@ The registry drives this lifecycle: `register()` → `initialize()` →
 | `ACTIONS` (+ `READ_ONLY_ACTIONS`) | A `frozenset` of method names invokable via `POST /v1/plugins/<name>/actions/<method>` (JWT-gated). Only listed names are reachable. |
 | `AI_TOOLS` | Advertise Ollama / OpenAI function-calling tools (`{name, description, parameters, action}`), aggregated at `GET /v1/plugins/ai/tools`. |
 | `DISPLAY` | Branding for the plugin's card in the client: `{label, summary, logo, color, category}`. `logo` is a lucide icon name. |
+| `REQUIRES` | What the plugin needs from the platform: `{services, optional_services, bundles}`. Lets the platform refuse to enable a plugin whose services are missing, offer to enable the bundles it needs, and show requirements on its card. Names are checked against `KNOWN_SERVICES` / `KNOWN_BUNDLES`. |
 
 ## Plugin-driven UI (the plugin owns its presentation)
 

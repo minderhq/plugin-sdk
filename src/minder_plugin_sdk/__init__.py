@@ -25,6 +25,12 @@ from .contract import Plugin, PluginMetadata
 from .errors import ConfigError, ManifestError, PluginError
 from .harness import check_plugin, run_lifecycle
 from .manifest import load_manifest, manifest_schema, validate_manifest
+from .requirements import (
+    KNOWN_BUNDLES,
+    KNOWN_SERVICES,
+    requirement_errors,
+    requirements,
+)
 from .schema import (
     FORMATS,
     WIDGETS,
@@ -66,6 +72,11 @@ __all__ = [
     "load_manifest",
     "validate_manifest",
     "manifest_schema",
+    # requirements (services / bundles a plugin needs)
+    "requirements",
+    "requirement_errors",
+    "KNOWN_SERVICES",
+    "KNOWN_BUNDLES",
     # testing
     "check_plugin",
     "run_lifecycle",

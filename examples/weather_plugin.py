@@ -42,6 +42,9 @@ class WeatherPlugin:
         "category": "data-source",
     }
 
+    # What this plugin needs from the platform: it sinks readings to InfluxDB.
+    REQUIRES = {"services": ["influxdb"], "optional_services": [], "bundles": []}
+
     ACTIONS = frozenset({"refresh", "get_weather", "search_cities"})
     # Read-only subset of ACTIONS, reachable via GET — "refresh" stays POST +
     # JWT-gated since it writes to InfluxDB. search_cities backs an autocomplete.
