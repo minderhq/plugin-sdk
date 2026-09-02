@@ -13,6 +13,7 @@ from typing import Any, Coroutine, Dict, List, cast
 from .ai_tools import ai_tool_errors
 from .capabilities import capabilities
 from .contract import PluginMetadata
+from .requirements import requirement_errors
 from .schema import config_errors, resolve_config_schema, resolve_effective_config
 
 __all__ = ["check_plugin", "run_lifecycle"]
@@ -47,6 +48,9 @@ def check_plugin(plugin: Any) -> List[str]:
 
     # AI tools must map to declared actions.
     problems.extend(ai_tool_errors(plugin))
+
+    # Declared service/bundle requirements must name real platform pieces.
+    problems.extend(requirement_errors(plugin))
 
     # ACTIONS must name real methods.
     for action in getattr(plugin, "ACTIONS", frozenset()) or ():
