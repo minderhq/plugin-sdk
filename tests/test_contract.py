@@ -74,3 +74,25 @@ def test_example_weather_plugin_is_a_valid_plugin():
     # extension points are declared as class attributes
     assert "get_weather" in WeatherPlugin.ACTIONS
     assert WeatherPlugin.AI_TOOLS[0]["action"] in WeatherPlugin.ACTIONS
+
+
+def test_example_presentation_contract_is_well_formed():
+    """The plugin-driven UI metadata: DISPLAY branding + per-field widgets, and
+    any options_action must reference a declared READ_ONLY action."""
+    from weather_plugin import WeatherPlugin  # type: ignore
+
+    # DISPLAY branding for the client card
+    assert WeatherPlugin.DISPLAY["logo"] and WeatherPlugin.DISPLAY["label"]
+
+    fields = {f["key"]: f for f in WeatherPlugin.CONFIG_SCHEMA}
+    # the long value renders as a textarea, the flag as a toggle
+    assert fields["WEATHER_LOCATIONS"]["widget"] == "textarea"
+    assert fields["WEATHER_SINK_INFLUXDB"]["widget"] == "toggle"
+
+    # the city field autocompletes from a source, and that source is a real
+    # read-only action on the plugin (so the client can safely call it).
+    city = fields["WEATHER_DEFAULT_CITY"]
+    assert city["widget"] == "autocomplete"
+    src = city["options_action"]
+    assert src in WeatherPlugin.READ_ONLY_ACTIONS
+    assert callable(getattr(WeatherPlugin, src))

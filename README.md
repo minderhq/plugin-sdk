@@ -54,6 +54,33 @@ The registry drives this lifecycle: `register()` → `initialize()` →
 | `CONFIG_SCHEMA` | Makes the plugin configurable over the API (`GET/PUT /v1/plugins/<name>/config`) — no container env + restart. The registry resolves `default → env → persisted` and calls `apply_config(effective)`. |
 | `ACTIONS` (+ `READ_ONLY_ACTIONS`) | A `frozenset` of method names invokable via `POST /v1/plugins/<name>/actions/<method>` (JWT-gated). Only listed names are reachable. |
 | `AI_TOOLS` | Advertise Ollama / OpenAI function-calling tools (`{name, description, parameters, action}`), aggregated at `GET /v1/plugins/ai/tools`. |
+| `DISPLAY` | Branding for the plugin's card in the client: `{label, summary, logo, color, category}`. `logo` is a lucide icon name. |
+
+## Plugin-driven UI (the plugin owns its presentation)
+
+Every plugin's config needs are different — a long value wants a `textarea`, a
+city wants autocomplete from a source, a flag wants a toggle. So the **plugin
+self-describes** how each field renders, and the **trusted client** draws it with
+its own components. Plugins never ship HTML/templates — that would be an injection
+vector and break the "no arbitrary code" guarantee; presentation is **declarative**.
+
+Add these optional keys to any `CONFIG_SCHEMA` field:
+
+| Key | Purpose |
+|-----|---------|
+| `widget` | `text` · `textarea` · `number` · `toggle` · `select` · `multiselect` · `secret` · `autocomplete` (default: inferred from `type`) |
+| `placeholder`, `rows` | input hint; textarea height |
+| `options` | static `[{value, label}]` for a select |
+| `options_action` | name of a **READ_ONLY action** returning `[{value, label}]` → a **dynamic** autocomplete (e.g. a city search). Reuses `ACTIONS`. |
+| `min` / `max` / `step` | numeric bounds |
+| `required`, `group` | validation; section grouping |
+
+A field with none of these renders as a plain input, so existing schemas keep
+working. See [`examples/weather_plugin.py`](examples/weather_plugin.py): a
+`textarea` for locations, a `toggle` for the sink, and a `WEATHER_DEFAULT_CITY`
+**autocomplete** backed by a `search_cities` read-only action — plus a `DISPLAY`
+logo. (Client + registry wiring tracked in
+[minderhq/minder#1262](https://github.com/minderhq/minder/issues/1262).)
 
 ## Gotchas (read these)
 

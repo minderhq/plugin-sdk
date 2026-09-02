@@ -33,14 +33,23 @@ _CURRENT_FIELDS = "temperature_2m,relative_humidity_2m,wind_speed_10m"
 class WeatherPlugin:
     """Poll a keyless weather API for configured locations; sink the series to InfluxDB."""
 
-    ACTIONS = frozenset({"refresh", "get_weather"})
-    # Read-only subset of ACTIONS, reachable unauthenticated via GET — "refresh"
-    # stays POST + JWT-gated since it writes to InfluxDB.
-    READ_ONLY_ACTIONS = frozenset({"get_weather"})
+    # Branding for the plugin's card in the client (DISPLAY, all optional).
+    DISPLAY = {
+        "label": "Weather",
+        "summary": "Local weather as a time series, plus an ask-the-weather AI tool.",
+        "logo": "cloud-sun",  # a lucide icon name (client has a lucide registry)
+        "color": "#38bdf8",
+        "category": "data-source",
+    }
+
+    ACTIONS = frozenset({"refresh", "get_weather", "search_cities"})
+    # Read-only subset of ACTIONS, reachable via GET — "refresh" stays POST +
+    # JWT-gated since it writes to InfluxDB. search_cities backs an autocomplete.
+    READ_ONLY_ACTIONS = frozenset({"get_weather", "search_cities"})
 
     # Central config: manageable over the API — GET/PUT /v1/plugins/weather/config.
-    # We can't know a user's city, so the collected locations are a first-class,
-    # runtime-editable setting (no restart) rather than baked-in.
+    # Each field carries PRESENTATION keys so the trusted client renders the right
+    # widget — a small text input would be wrong for these very different fields.
     _DEFAULT_LOCATIONS = "Istanbul:41.01:28.98,London:51.51:-0.13"
     CONFIG_SCHEMA = [
         {
@@ -48,12 +57,31 @@ class WeatherPlugin:
             "type": "string",
             "default": _DEFAULT_LOCATIONS,
             "description": "Locations to collect, as 'name:lat:lon' triples, comma-separated.",
+            # long, multi-line value → a textarea, not the small default input.
+            "widget": "textarea",
+            "rows": 4,
+            "placeholder": "Istanbul:41.01:28.98,\nLondon:51.51:-0.13",
+            "group": "Locations",
+        },
+        {
+            "key": "WEATHER_DEFAULT_CITY",
+            "type": "string",
+            "default": "Istanbul",
+            "description": "Fallback city for the get_weather tool when none is given.",
+            # a city name → autocomplete from a SOURCE, not free text. The client
+            # calls the search_cities READ_ONLY action to populate suggestions.
+            "widget": "autocomplete",
+            "options_action": "search_cities",
+            "placeholder": "Start typing a city…",
+            "group": "Locations",
         },
         {
             "key": "WEATHER_SINK_INFLUXDB",
             "type": "bool",
             "default": True,
             "description": "Write each collection to InfluxDB as a time series.",
+            "widget": "toggle",
+            "group": "Storage",
         },
     ]
 
@@ -95,6 +123,9 @@ class WeatherPlugin:
                 "WEATHER_LOCATIONS": os.environ.get(
                     "WEATHER_LOCATIONS", self._DEFAULT_LOCATIONS
                 ),
+                "WEATHER_DEFAULT_CITY": os.environ.get(
+                    "WEATHER_DEFAULT_CITY", "Istanbul"
+                ),
                 "WEATHER_SINK_INFLUXDB": os.environ.get("WEATHER_SINK_INFLUXDB", "1"),
             }
         )
@@ -103,6 +134,8 @@ class WeatherPlugin:
         """Map centrally-managed config → runtime state (no restart). See CONFIG_SCHEMA."""
         if "WEATHER_LOCATIONS" in cfg:
             self.locations = self._parse_locations(cfg["WEATHER_LOCATIONS"] or "")
+        if "WEATHER_DEFAULT_CITY" in cfg:
+            self.default_city = (cfg["WEATHER_DEFAULT_CITY"] or "").strip()
         if "WEATHER_SINK_INFLUXDB" in cfg:
             v = cfg["WEATHER_SINK_INFLUXDB"]
             self.sink_influxdb = (
@@ -260,8 +293,10 @@ class WeatherPlugin:
         """Force an immediate re-collection (same as the hourly loop)."""
         return await self.collect_data()
 
-    async def get_weather(self, location: str) -> Dict:
-        """Current weather for any city by name (backs the get_weather tool)."""
+    async def get_weather(self, location: str = "") -> Dict:
+        """Current weather for a city by name (backs the get_weather tool).
+        Falls back to the configured WEATHER_DEFAULT_CITY when none is given."""
+        location = (location or "").strip() or getattr(self, "default_city", "")
         if not location:
             return {"error": "location is required"}
         coords = await self._geocode(location)
@@ -271,3 +306,30 @@ class WeatherPlugin:
         if r is None:
             return {"location": location, "error": "weather unavailable"}
         return {"location": location, **r}
+
+    async def search_cities(self, query: str = "") -> Dict:
+        """Return city options [{value, label}] for the given query — backs the
+        WEATHER_DEFAULT_CITY autocomplete (CONFIG_SCHEMA ``options_action``). The
+        client renders these as suggestions; the plugin owns the data source."""
+        query = (query or "").strip()
+        if len(query) < 2:
+            return {"options": []}
+        try:
+            async with httpx.AsyncClient(timeout=self.http_timeout) as client:
+                resp = await client.get(
+                    self.geocode_base, params={"name": query, "count": 5}
+                )
+                resp.raise_for_status()
+                results = (resp.json() or {}).get("results") or []
+        except Exception as e:
+            logger.warning(f"city search failed: {type(e).__name__}: {e}")
+            return {"options": []}
+        options = []
+        for r in results:
+            if not isinstance(r, dict) or not r.get("name"):
+                continue
+            label = ", ".join(
+                str(p) for p in (r.get("name"), r.get("admin1"), r.get("country")) if p
+            )
+            options.append({"value": r["name"], "label": label})
+        return {"options": options}
