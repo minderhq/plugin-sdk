@@ -35,6 +35,9 @@ class PluginMetadata:
     data_sources: List[str] = field(default_factory=list)
     databases: List[str] = field(default_factory=list)
     registered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Contract version this plugin targets — lets the platform negotiate and evolve
+    # without breaking older plugins (see RFC 0001). Unknown → treat as v1.
+    api_version: str = "minder.dev/v1"
 
 
 @runtime_checkable

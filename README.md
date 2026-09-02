@@ -109,6 +109,28 @@ is [`schema/manifest.schema.json`](schema/manifest.schema.json). Most plugins ar
 module plugins (above); reach for a manifest when you just need to pipe a webhook
 into the vector store.
 
+## Scaling to any plugin (RFC 0001)
+
+Thousands of plugin types can't fit a fixed lifecycle + a closed widget enum — and
+the answer is **not** plugin-supplied code (that breaks the no-arbitrary-code
+guarantee). Instead variety comes from **data + trusted primitives**:
+
+- **Config is JSON Schema + UI Schema.** `resolve_config_schema(plugin)` returns a
+  standard JSON Schema (nested objects, arrays, enums, formats, conditionals,
+  validation) plus UI hints. The simple `CONFIG_SCHEMA` list is compiled to this,
+  so simple plugins stay one-liners while the platform always speaks JSON Schema.
+- **Widgets are a client-side registry**, resolved by name with a default
+  fallback — a plugin can ask for a widget that doesn't exist yet and degrade
+  gracefully; new rich widgets are added to the trusted client, never shipped as
+  plugin code.
+- **Capabilities, not one lifecycle.** `capabilities(plugin)` reports what a
+  plugin implements (data-source, ai-tools, actions, webhook-ingest, scheduler,
+  connection, ui-panel…) — an open vocabulary; unknown capabilities are ignored.
+- **Versioned** (`api_version` / `API_VERSION`) so the contract evolves without
+  breaking older plugins.
+
+Full design: [`docs/rfc/0001-extensible-plugin-contract.md`](docs/rfc/0001-extensible-plugin-contract.md).
+
 ## Develop
 
 ```bash
