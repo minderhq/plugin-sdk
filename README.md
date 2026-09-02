@@ -131,6 +131,34 @@ guarantee). Instead variety comes from **data + trusted primitives**:
 
 Full design: [`docs/rfc/0001-extensible-plugin-contract.md`](docs/rfc/0001-extensible-plugin-contract.md).
 
+## SDK toolkit
+
+The SDK is more than the contract — it ships the batteries a plugin author needs:
+
+| Import | What |
+|--------|------|
+| `PluginBase` | Optional base class — sensible defaults for the whole lifecycle + the standard config flow, so a data-source plugin is just `register` + `collect_data`. |
+| `check_plugin(p)` / `run_lifecycle(p)` | Test helpers: contract violations as a list; drive the full lifecycle in a test. |
+| `resolve_config_schema` / `resolve_effective_config` / `validate_config` | Compile config to JSON Schema, resolve default→env→persisted, validate values. |
+| `build_tool_definitions` / `ai_tool_errors` | Turn `AI_TOOLS` into OpenAI/Ollama tool defs; validate they map to actions. |
+| `load_manifest` / `validate_manifest` | Parse + validate a `webhook → store-vector` manifest (bundled JSON Schema). |
+| `capabilities(p)` + `DataSource` / `Scheduler` / `WebhookHandler` / … | Introspect + type-check per-capability interfaces. |
+
+### CLI
+
+```bash
+minder-plugin scaffold my-plugin        # generate a working skeleton
+minder-plugin validate my_plugin.py     # (or a manifest.yaml) → contract check
+minder-plugin inspect  my_plugin.py     # capabilities + compiled config/UI schema + tools
+```
+
+### Examples
+
+- [`weather_plugin.py`](examples/weather_plugin.py) — the full reference (config UI, actions, AI tool, DISPLAY).
+- [`minimal_plugin.py`](examples/minimal_plugin.py) — the smallest data source (`PluginBase`).
+- [`ai_tool_plugin.py`](examples/ai_tool_plugin.py) — an AI-tool-only plugin.
+- [`discord_manifest.yaml`](examples/discord_manifest.yaml) — a manifest plugin.
+
 ## Develop
 
 ```bash
