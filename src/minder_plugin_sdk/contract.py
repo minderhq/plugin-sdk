@@ -63,7 +63,7 @@ class Plugin(Protocol):
 # Optional extension points — declare these as CLASS ATTRIBUTES on your plugin.
 #
 # CONFIG_SCHEMA — make the plugin configurable over the API (no container env +
-#   restart). A list of field descriptors, each a plain dict:
+#   restart). A list of field descriptors, each a plain dict. The DATA keys are:
 #     {"key": str, "type": "string|int|float|bool", "default": Any,
 #      "description": str, "secret": bool (optional)}
 #   The registry resolves each field as default → env[key] → persisted (API-set)
@@ -72,6 +72,19 @@ class Plugin(Protocol):
 #   is one config→state path. Exposed via:
 #     GET  /v1/plugins/<name>/config   → {schema, values}  (secret values masked)
 #     PUT  /v1/plugins/<name>/config   → validate, persist, apply live (JWT-gated)
+#
+#   PRESENTATION keys (all OPTIONAL) tell the *trusted client* how to render each
+#   field — the plugin never ships HTML, only this declarative metadata:
+#     "widget":  text | textarea | number | toggle | select | multiselect |
+#                secret | autocomplete   (default: inferred from "type")
+#     "placeholder": str            "rows": int (textarea height)
+#     "options": [{"value": Any, "label": str}]   — a STATIC select/multiselect
+#     "options_action": str         — name of a READ_ONLY action returning
+#                                     [{value, label}] → a DYNAMIC autocomplete
+#                                     (e.g. a city search); reuses ACTIONS.
+#     "min"/"max"/"step": number    "required": bool    "group": str (section)
+#   Unknown keys are ignored; a field with none of these renders as a plain input,
+#   so old {key,type,default,description} schemas keep working unchanged.
 #
 # ACTIONS — a frozenset of method names invokable via
 #   ``POST /v1/plugins/<name>/actions/<method>`` (JWT-gated; JSON body → kwargs).
@@ -83,3 +96,9 @@ class Plugin(Protocol):
 #     {name, description, parameters (JSON Schema), action}
 #   where ``action`` is one of ACTIONS. ``GET /v1/plugins/ai/tools`` aggregates
 #   these into tool definitions for function-calling chat.
+#
+# DISPLAY — branding for the plugin's card in the client. A plain dict:
+#     {"label": str, "summary": str, "logo": str, "color": str, "category": str}
+#   ``logo`` is a **lucide icon name** (the client has a lucide Icon registry) —
+#   safe by default; an inline SVG / URL MAY be allowed but is sanitized by the
+#   client. Absent → the client falls back to the plugin name + a default icon.
