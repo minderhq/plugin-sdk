@@ -46,7 +46,7 @@ minder-plugin = "minder_plugin_sdk.cli:main"
 [project.urls]
 Homepage = "https://github.com/minderhq/plugin-sdk"
 Source = "https://github.com/minderhq/plugin-sdk"
-Issues = "https://github.com/minderhq/minder/issues"
+Issues = "https://github.com/minderhq/plugin-sdk/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

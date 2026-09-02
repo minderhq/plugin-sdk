@@ -106,7 +106,7 @@ an `AI_TOOLS` function-calling tool. Depends only on `httpx` + this SDK.
 
 A separate, declarative mechanism for `webhook → store-vector` ingestion — a YAML
 manifest that supplies **parameters only** (no code). Its JSON Schema (draft-07)
-is [`schema/manifest.schema.json`](schema/manifest.schema.json). Most plugins are
+is [`src/minder_plugin_sdk/schemas/manifest.schema.json`](src/minder_plugin_sdk/schemas/manifest.schema.json). Most plugins are
 module plugins (above); reach for a manifest when you just need to pipe a webhook
 into the vector store.
 
