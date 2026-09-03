@@ -240,6 +240,10 @@ def config_errors(schema: Dict[str, Any], values: Mapping[str, Any]) -> List[str
         prop = props.get(key)
         if isinstance(prop, dict):
             errors.extend(_prop_errors(key, prop, value))
+        else:
+            # A key the schema doesn't declare is almost always a typo; flagging it
+            # gives the author feedback instead of the value being silently dropped.
+            errors.append(f"{key}: unknown config key")
     return errors
 
 
