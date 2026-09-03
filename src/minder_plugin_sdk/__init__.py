@@ -24,6 +24,7 @@ from .capabilities import (
 from .contract import Plugin, PluginMetadata
 from .errors import ConfigError, ManifestError, PluginError
 from .harness import check_plugin, run_lifecycle
+from .influx import latest_influx_date, write_history
 from .manifest import load_manifest, manifest_schema, validate_manifest
 from .requirements import (
     KNOWN_BUNDLES,
@@ -72,6 +73,9 @@ __all__ = [
     "load_manifest",
     "validate_manifest",
     "manifest_schema",
+    # influx time-series helpers
+    "latest_influx_date",
+    "write_history",
     # requirements (services / bundles a plugin needs)
     "requirements",
     "requirement_errors",
