@@ -157,3 +157,29 @@ def test_validate_manifest_falls_back_to_light_check_without_jsonschema(monkeypa
     with pytest.raises(ManifestError) as ei:
         validate_manifest({"kind": "Plugin"})
     assert any("missing required key" in e for e in ei.value.errors)
+
+
+def test_light_errors_rejects_non_dict_metadata_and_spec():
+    errs = _light_errors(
+        {
+            "apiVersion": "minder.dev/v1alpha1",
+            "kind": "Plugin",
+            "metadata": "oops",
+            "spec": "nope",
+        }
+    )
+    assert any("metadata must be an object" in e for e in errs)
+    assert any("spec must be an object" in e for e in errs)
+
+
+def test_light_errors_flags_missing_nested_required():
+    errs = _light_errors(
+        {
+            "apiVersion": "minder.dev/v1alpha1",
+            "kind": "Plugin",
+            "metadata": {"name": "n", "version": "1.0.0"},
+            "spec": {"trigger": {}, "action": {"type": "store-vector"}},
+        }
+    )
+    assert any("trigger.type" in e for e in errs)
+    assert any("store.collection" in e for e in errs)

@@ -134,3 +134,28 @@ def test_cli_scaffold_then_validate_then_inspect(tmp_path, capsys):
 
 def test_cli_validate_manifest_file():
     assert cli.main(["validate", str(EXAMPLES / "discord_manifest.yaml")]) == 0
+
+
+def test_check_plugin_accepts_required_field_without_default():
+    """A required config field with no default (a user-supplied API key) is set at
+    runtime, not a plugin defect — check_plugin must not flag it."""
+    from minder_plugin_sdk import PluginBase, PluginMetadata, check_plugin
+
+    class P(PluginBase):
+        CONFIG_SCHEMA = [
+            {"key": "API_KEY", "type": "string", "required": True, "description": "k"}
+        ]
+
+        async def register(self):
+            return PluginMetadata(
+                name="p", version="1.0.0", description="d", author="a"
+            )
+
+    assert check_plugin(P()) == []
+
+    class Bad(P):
+        # SDK simple type is "int" (not JSON "integer"); a non-int default is a
+        # real plugin defect and must still be caught.
+        CONFIG_SCHEMA = [{"key": "N", "type": "int", "default": "notanint"}]
+
+    assert any("N" in e for e in check_plugin(Bad()))
