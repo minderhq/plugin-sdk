@@ -57,16 +57,34 @@ def _light_errors(m: Dict[str, Any]) -> List[str]:
     if m.get("kind") not in (None, "Plugin"):
         errors.append(f"unsupported kind: {m.get('kind')!r}")
     meta = m.get("metadata")
-    if isinstance(meta, dict):
+    if "metadata" in m and not isinstance(meta, dict):
+        errors.append("metadata must be an object")
+    elif isinstance(meta, dict):
         for key in ("name", "version"):
             if not meta.get(key):
                 errors.append(f"metadata.{key} is required")
     spec = m.get("spec")
-    if isinstance(spec, dict):
+    if "spec" in m and not isinstance(spec, dict):
+        errors.append("spec must be an object")
+    elif isinstance(spec, dict):
+        trigger = spec.get("trigger")
         if "trigger" not in spec:
             errors.append("spec.trigger is required")
+        elif not isinstance(trigger, dict) or not trigger.get("type"):
+            errors.append("spec.trigger.type is required")
+        action = spec.get("action")
         if "action" not in spec:
             errors.append("spec.action is required")
+        elif not isinstance(action, dict) or not action.get("type"):
+            errors.append("spec.action.type is required")
+        elif action.get("type") == "store-vector":
+            store = action.get("store")
+            if not isinstance(store, dict) or not store.get("collection"):
+                errors.append("spec.action.store.collection is required")
+            elif not (
+                isinstance(store.get("input"), dict) and store["input"].get("text")
+            ):
+                errors.append("spec.action.store.input.text is required")
     return errors
 
 

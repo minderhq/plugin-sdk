@@ -14,6 +14,7 @@ collection loop.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, datetime
 from re import Pattern
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -45,7 +46,8 @@ def _format_field(value: Any) -> Optional[str]:
     if isinstance(value, int):
         return f"{value}i"
     if isinstance(value, float):
-        return repr(value)
+        # nan/inf are not valid line protocol — drop rather than 400 the whole batch
+        return repr(value) if math.isfinite(value) else None
     escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
 
@@ -71,7 +73,8 @@ def line_protocol(
             parts.append(f"{escape_tag(str(k))}={formatted}")
     if not parts:
         return ""
-    line = f"{measurement}{tag_str} {','.join(parts)}"
+    meas = str(measurement).replace(",", "\\,").replace(" ", "\\ ")
+    line = f"{meas}{tag_str} {','.join(parts)}"
     if ts is not None:
         line += f" {ts}"
     return line
@@ -93,7 +96,7 @@ async def latest_influx_date(
 
     if not cfg:
         return None
-    if not safe_pattern.match(tag_value):
+    if not safe_pattern.fullmatch(tag_value):
         logger.warning(f"Skipping influx resume for unsafe {tag_key}: {tag_value!r}")
         return None
     host, port = cfg.get("host", "minder-influxdb"), cfg.get("port", 8086)
@@ -147,25 +150,35 @@ async def write_history(
 
     if not (cfg and points):
         return 0
-    if not safe_pattern.match(tag_value):
+    if not safe_pattern.fullmatch(tag_value):
         logger.warning(f"Skipping influx write for unsafe {tag_key}: {tag_value!r}")
         return 0
     host, port = cfg.get("host", "minder-influxdb"), cfg.get("port", 8086)
     org, bucket = cfg.get("org", "minder"), cfg.get("bucket", "minder-metrics")
-    lines = "\n".join(
-        f"{measurement},{tag_key}={tag_value} {field_name}={value} {ts}"
+    # Build each point through line_protocol: it escapes the measurement / tag /
+    # field key and DROPS a non-finite (nan/inf) value — one bad point can no
+    # longer 400 the whole batch and stall an incremental resume.
+    lines = [
+        ln
         for ts, value in points
-    )
+        if (
+            ln := line_protocol(
+                measurement, {tag_key: tag_value}, {field_name: value}, ts
+            )
+        )
+    ]
+    if not lines:
+        return 0
     try:
         async with httpx.AsyncClient(timeout=http_timeout) as client:
             resp = await client.post(
                 f"http://{host}:{port}/api/v2/write",
                 params={"org": org, "bucket": bucket, "precision": "s"},
                 headers={"Authorization": f"Token {cfg.get('token', '')}"},
-                content=lines,
+                content="\n".join(lines),
             )
             resp.raise_for_status()
-        return len(points)
+        return len(lines)
     except Exception as e:
         logger.warning(f"InfluxDB write failed for {tag_value}: {type(e).__name__}")
         return 0

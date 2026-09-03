@@ -67,10 +67,15 @@ def check_plugin(plugin: Any) -> List[str]:
                 f"field {key!r} options_action {src!r} is not a READ_ONLY action"
             )
 
-    # Default config must validate against the plugin's own schema.
+    # Default config must validate against the plugin's own schema. Validate only
+    # the fields that actually have a value: a REQUIRED field with no default (the
+    # common "user must supply an API key" shape) is unset at check time and
+    # supplied at runtime — it's not a plugin defect, so don't type-check its
+    # None or enforce `required` here (that would falsely fail a valid plugin).
     schema, _ = resolve_config_schema(plugin)
     defaults = resolve_effective_config(plugin)
-    problems.extend(config_errors(schema, defaults))
+    present = {k: v for k, v in defaults.items() if v is not None}
+    problems.extend(config_errors({**schema, "required": []}, present))
 
     # Capabilities must be resolvable.
     try:
