@@ -16,9 +16,65 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime
 from re import Pattern
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+_TAG_ESCAPES = ((",", "\\,"), ("=", "\\="), (" ", "\\ "))
+
+
+def escape_tag(value: str) -> str:
+    """Escape a value for an InfluxDB line-protocol **tag key or value**: comma,
+    equals and space must be backslash-escaped or they corrupt the tag set — a
+    config-sourced tag (a feed name, a location, an ``owner/repo``) can contain
+    any of them. Backslash itself is NOT escaped; it is the escape character."""
+    for ch, rep in _TAG_ESCAPES:
+        value = value.replace(ch, rep)
+    return value
+
+
+def _format_field(value: Any) -> Optional[str]:
+    """Format one field value for line protocol, or ``None`` to drop it. Ints get
+    the ``i`` suffix (InfluxDB integer), floats stay bare, bools become
+    true/false, strings are quoted; ``None`` is dropped so a missing reading just
+    omits that field. bool is checked before int (bool is an int subclass)."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return f"{value}i"
+    if isinstance(value, float):
+        return repr(value)
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def line_protocol(
+    measurement: str,
+    tags: Mapping[str, Any],
+    fields: Mapping[str, Any],
+    ts: Optional[int] = None,
+) -> str:
+    """Build ONE InfluxDB line-protocol line — tags escaped, int/float/bool/str
+    fields formatted, ``None`` fields dropped. Returns ``""`` when no field
+    survives (an all-empty reading is not a valid point). Centralises the escaping
+    every hand-rolled writer needs (news/weather/github), so a tag carrying a
+    comma or equals can't silently corrupt the series."""
+    tag_str = "".join(
+        f",{escape_tag(str(k))}={escape_tag(str(v))}" for k, v in tags.items()
+    )
+    parts = []
+    for k, v in fields.items():
+        formatted = _format_field(v)
+        if formatted is not None:
+            parts.append(f"{escape_tag(str(k))}={formatted}")
+    if not parts:
+        return ""
+    line = f"{measurement}{tag_str} {','.join(parts)}"
+    if ts is not None:
+        line += f" {ts}"
+    return line
 
 
 async def latest_influx_date(

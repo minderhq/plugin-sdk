@@ -24,7 +24,12 @@ from .capabilities import (
 from .contract import Plugin, PluginMetadata
 from .errors import ConfigError, ManifestError, PluginError
 from .harness import check_plugin, run_lifecycle
-from .influx import latest_influx_date, write_history
+from .influx import (
+    escape_tag,
+    latest_influx_date,
+    line_protocol,
+    write_history,
+)
 from .manifest import load_manifest, manifest_schema, validate_manifest
 from .requirements import (
     KNOWN_BUNDLES,
@@ -76,6 +81,8 @@ __all__ = [
     # influx time-series helpers
     "latest_influx_date",
     "write_history",
+    "line_protocol",
+    "escape_tag",
     # requirements (services / bundles a plugin needs)
     "requirements",
     "requirement_errors",
@@ -91,4 +98,4 @@ __all__ = [
     "__version__",
 ]
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
