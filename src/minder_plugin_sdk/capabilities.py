@@ -46,6 +46,11 @@ def capabilities(plugin: Any) -> Set[str]:
     plugins get sensible capabilities for free."""
     declared = getattr(plugin, "CAPABILITIES", None)
     if declared is not None:
+        # A bare string would otherwise set()-split into single characters
+        # (silently dropping the plugin's real capability, since each char is an
+        # unknown capability the platform ignores). Accept it as one capability.
+        if isinstance(declared, str):
+            return {declared}
         return set(declared)
     caps: Set[str] = set()
     if getattr(plugin, "CONFIG_JSONSCHEMA", None) or getattr(
