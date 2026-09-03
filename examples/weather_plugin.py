@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import httpx
 
-from minder_plugin_sdk import PluginMetadata
+from minder_plugin_sdk import PluginMetadata, line_protocol
 
 __all__ = ["WeatherPlugin"]
 
@@ -234,20 +234,27 @@ class WeatherPlugin:
         host, port = cfg.get("host", "minder-influxdb"), cfg.get("port", 8086)
         org, bucket = cfg.get("org", "minder"), cfg.get("bucket", "minder-metrics")
         token = cfg.get("token", "")
-        lines = []
-        for loc, r in readings.items():
-            fields = [
-                f"{k}={v}"
-                for k, v in (
-                    ("temperature", r.get("temperature")),
-                    ("humidity", r.get("humidity")),
-                    ("wind_speed", r.get("wind_speed")),
-                )
-                if isinstance(v, (int, float))
-            ]
-            if fields:
-                tag = loc.replace(" ", "\\ ")
-                lines.append(f"weather,location={tag} {','.join(fields)}")
+
+        # Build one line per location with the SDK's line_protocol helper: it
+        # escapes the location tag (comma / equals / space) and drops missing
+        # (None) readings — no hand-rolled escaping to get subtly wrong. Cast to
+        # float so the fields stay float-typed (bare value, no 'i' suffix).
+        def _num(v: object) -> "Optional[float]":
+            return float(v) if isinstance(v, (int, float)) else None
+
+        lines = [
+            line_protocol(
+                "weather",
+                {"location": loc},
+                {
+                    "temperature": _num(r.get("temperature")),
+                    "humidity": _num(r.get("humidity")),
+                    "wind_speed": _num(r.get("wind_speed")),
+                },
+            )
+            for loc, r in readings.items()
+        ]
+        lines = [ln for ln in lines if ln]
         if not lines:
             return False
         url = f"http://{host}:{port}/api/v2/write"
