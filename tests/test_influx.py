@@ -12,7 +12,13 @@ from datetime import date
 import httpx
 import pytest
 
-from minder_plugin_sdk import influx, latest_influx_date, write_history
+from minder_plugin_sdk import (
+    escape_tag,
+    influx,
+    latest_influx_date,
+    line_protocol,
+    write_history,
+)
 
 SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -246,3 +252,42 @@ def test_write_history_writes_line_protocol_and_counts(monkeypatch):
         "price_hist,symbol=BTC-USD close=1.5 100\n"
         "price_hist,symbol=BTC-USD close=2.5 200"
     )
+
+
+# ── escape_tag / line_protocol builders ──────────────────────────────────────
+def test_escape_tag_escapes_comma_equals_space_only():
+    assert escape_tag("a,b=c d") == "a\\,b\\=c\\ d"
+    assert escape_tag("owner/repo") == "owner/repo"  # slash is legal, untouched
+    assert escape_tag("plain") == "plain"
+
+
+def test_line_protocol_formats_int_float_bool_and_drops_none():
+    line = line_protocol(
+        "m",
+        {"host": "a b"},  # tag with a space → escaped
+        {"i": 5, "f": 1.5, "b": True, "gone": None},
+        ts=100,
+    )
+    assert line == "m,host=a\\ b i=5i,f=1.5,b=true 100"
+
+
+def test_line_protocol_quotes_string_fields():
+    assert line_protocol("m", {}, {"s": 'he said "hi"'}) == 'm s="he said \\"hi\\""'
+
+
+def test_line_protocol_empty_when_all_fields_none():
+    assert line_protocol("m", {"t": "x"}, {"a": None, "b": None}) == ""
+
+
+def test_line_protocol_omits_timestamp_when_not_given():
+    assert line_protocol("m", {"t": "x"}, {"v": 3}) == "m,t=x v=3i"
+
+
+def test_line_protocol_matches_hand_rolled_github_line():
+    # the exact shape the github plugin emits, now via the shared builder
+    line = line_protocol(
+        "github_repo",
+        {"repo": "owner/repo"},
+        {"stars": 5, "forks": 2, "open_issues": 1},
+    )
+    assert line == "github_repo,repo=owner/repo stars=5i,forks=2i,open_issues=1i"
