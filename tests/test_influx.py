@@ -291,3 +291,48 @@ def test_line_protocol_matches_hand_rolled_github_line():
         {"stars": 5, "forks": 2, "open_issues": 1},
     )
     assert line == "github_repo,repo=owner/repo stars=5i,forks=2i,open_issues=1i"
+
+
+def test_line_protocol_escapes_measurement():
+    assert line_protocol("a b,c", {"t": "x"}, {"v": 1}) == "a\\ b\\,c,t=x v=1i"
+
+
+def test_line_protocol_drops_nan_and_inf_fields():
+    assert line_protocol("m", {"t": "x"}, {"a": float("nan"), "b": 2}) == "m,t=x b=2i"
+    assert line_protocol("m", {"t": "x"}, {"a": float("inf")}) == ""
+
+
+def test_latest_influx_date_guard_uses_fullmatch(monkeypatch):
+    # a caller pattern that isn't end-anchored must NOT let an injection prefix pass
+    loose = re.compile(r"[A-Za-z0-9]+")
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_client([{"t": "2021-01-01"}]))
+    got = _run(
+        latest_influx_date(
+            http_timeout=1.0,
+            cfg=CFG,
+            safe_pattern=loose,
+            measurement="m",
+            tag_key="s",
+            tag_value="AAA'; DROP TABLE x",
+        )
+    )
+    assert got is None  # blocked by fullmatch (was allowed by prefix .match)
+
+
+def test_write_history_skips_nan_point_not_whole_batch(monkeypatch):
+    cap = {}
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_client({}, capture=cap))
+    n = _run(
+        write_history(
+            http_timeout=1.0,
+            cfg=CFG,
+            safe_pattern=SAFE,
+            measurement="fund",
+            tag_key="code",
+            tag_value="YAC",
+            field_name="price",
+            points=[(100, 1.5), (200, float("nan")), (300, 2.5)],
+        )
+    )
+    assert n == 2  # the nan point is dropped, the other two still written
+    assert "nan" not in cap["content"] and cap["content"].count("\n") == 1
