@@ -12,7 +12,7 @@ class _P:
     CONFIG_SCHEMA = [
         {"key": "ENABLED", "type": "bool", "default": True},
         {"key": "COUNT", "type": "int", "default": 3},
-        {"key": "RATE", "type": "number", "default": 1.0},
+        {"key": "RATE", "type": "float", "default": 1.0},
         {"key": "NAME", "type": "string", "default": "x"},
     ]
 
