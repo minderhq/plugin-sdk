@@ -42,8 +42,10 @@ class PluginBase:
         self.status = "ready"
 
     async def health_check(self) -> Dict[str, Any]:
-        # MUST return {"healthy": <bool>} — the default says healthy once ready.
-        return {"healthy": self.status in ("ready", "registered")}
+        # MUST return {"healthy": <bool>}. Healthy only once initialize() has run
+        # (status == "ready") — "registered" is pre-init, so it must NOT read
+        # healthy or the monitoring loop trusts a plugin that never initialized.
+        return {"healthy": self.status == "ready"}
 
     async def collect_data(self) -> Dict[str, Any]:
         return {}
