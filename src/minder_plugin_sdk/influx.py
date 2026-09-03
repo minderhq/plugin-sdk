@@ -18,8 +18,6 @@ from datetime import date, datetime
 from re import Pattern
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +33,8 @@ async def latest_influx_date(
     """Latest day already stored for ``tag_value`` (InfluxDB v3 SQL query), or
     ``None`` if empty/unavailable. Never raises — a resume-query failure
     degrades to "no resume point" (the caller backfills from scratch)."""
+    import httpx  # lazy: keep `import minder_plugin_sdk` working without httpx
+
     if not cfg:
         return None
     if not safe_pattern.match(tag_value):
@@ -87,6 +87,8 @@ async def write_history(
     """Write ``[(ts, value)]`` to InfluxDB under ``field_name``; return the count
     written (0 if the sink is off/unconfigured, ``points`` is empty, or the
     write fails)."""
+    import httpx  # lazy: keep `import minder_plugin_sdk` working without httpx
+
     if not (cfg and points):
         return 0
     if not safe_pattern.match(tag_value):
