@@ -143,6 +143,34 @@ def resolve_config_schema(plugin: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return {"type": "object", "properties": {}}, {}
 
 
+def _coerce(value: Any, jtype: Optional[str]) -> Any:
+    """Coerce an env-sourced string to the field's JSON-Schema type — env values
+    are always strings, so a ``bool``/``integer``/``number`` field would otherwise
+    keep a string (``"false"`` is truthy!). A value that can't be coerced is
+    returned unchanged so validation surfaces it instead of the coercion masking
+    a bad input."""
+    if not isinstance(value, str):
+        return value
+    if jtype == "boolean":
+        low = value.strip().lower()
+        if low in ("1", "true", "yes", "on"):
+            return True
+        if low in ("0", "false", "no", "off", ""):
+            return False
+        return value
+    if jtype == "integer":
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    if jtype == "number":
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    return value
+
+
 def resolve_effective_config(
     plugin: Any,
     env: Optional[Mapping[str, str]] = None,
@@ -160,7 +188,7 @@ def resolve_effective_config(
     for key, prop in schema.get("properties", {}).items():
         value: Any = prop.get("default")
         if key in env:
-            value = env[key]
+            value = _coerce(env[key], prop.get("type"))
         if key in persisted:
             value = persisted[key]
         out[key] = value
