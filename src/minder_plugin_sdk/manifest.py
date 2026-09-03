@@ -81,7 +81,9 @@ def _light_errors(m: Dict[str, Any]) -> List[str]:
             store = action.get("store")
             if not isinstance(store, dict) or not store.get("collection"):
                 errors.append("spec.action.store.collection is required")
-            elif not (isinstance(store.get("input"), dict) and store["input"].get("text")):
+            elif not (
+                isinstance(store.get("input"), dict) and store["input"].get("text")
+            ):
                 errors.append("spec.action.store.input.text is required")
     return errors
 
