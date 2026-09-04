@@ -336,3 +336,23 @@ def test_write_history_skips_nan_point_not_whole_batch(monkeypatch):
     )
     assert n == 2  # the nan point is dropped, the other two still written
     assert "nan" not in cap["content"] and cap["content"].count("\n") == 1
+
+
+def test_write_history_drops_non_finite_points():
+    # cfg + points are present, but every value is non-finite, so line_protocol
+    # drops them all -> no lines -> 0 (one bad point can't 400 the whole batch).
+    assert (
+        _run(
+            write_history(
+                http_timeout=1.0,
+                cfg={"host": "unused"},
+                safe_pattern=SAFE,
+                measurement="m",
+                tag_key="code",
+                tag_value="AAA",
+                field_name="price",
+                points=[(1, float("nan")), (2, float("inf"))],
+            )
+        )
+        == 0
+    )
