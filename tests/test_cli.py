@@ -141,3 +141,12 @@ def test_scaffold_refuses_to_overwrite(tmp_path, capsys):
     assert rc == 1
     assert "refusing to overwrite" in capsys.readouterr().out
     assert out.read_text(encoding="utf-8") == "# already here\n"  # untouched
+
+
+def test_load_plugin_class_raises_when_unimportable(tmp_path):
+    # A non-Python suffix has no import loader, so spec_from_file_location returns
+    # None -> _load_plugin_class raises rather than crashing with AttributeError.
+    p = tmp_path / "not_python.txt"
+    p.write_text("nope", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="cannot import"):
+        cli._load_plugin_class(p)

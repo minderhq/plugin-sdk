@@ -183,3 +183,33 @@ def test_light_errors_flags_missing_nested_required():
     )
     assert any("trigger.type" in e for e in errs)
     assert any("store.collection" in e for e in errs)
+
+
+def test_light_errors_flags_action_without_type():
+    errs = _light_errors(
+        {
+            "apiVersion": "minder.dev/v1alpha1",
+            "kind": "Plugin",
+            "metadata": {"name": "n", "version": "1.0.0"},
+            "spec": {
+                "trigger": {"type": "webhook", "webhook": {"path": "/x"}},
+                "action": {},
+            },
+        }
+    )
+    assert any("spec.action.type is required" in e for e in errs)
+
+
+def test_light_errors_flags_store_vector_missing_input_text():
+    errs = _light_errors(
+        {
+            "apiVersion": "minder.dev/v1alpha1",
+            "kind": "Plugin",
+            "metadata": {"name": "n", "version": "1.0.0"},
+            "spec": {
+                "trigger": {"type": "webhook", "webhook": {"path": "/x"}},
+                "action": {"type": "store-vector", "store": {"collection": "c"}},
+            },
+        }
+    )
+    assert any("spec.action.store.input.text is required" in e for e in errs)
