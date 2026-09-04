@@ -17,6 +17,16 @@ def test_explicit_capabilities_override_wins():
     assert capabilities(P()) == {"config", "something-custom"}
 
 
+def test_bare_string_capabilities_is_one_capability_not_char_split():
+    # A common author mistake: CAPABILITIES = "data-source" (a str, not a list).
+    # set("data-source") would split into 11 single-char "capabilities" the
+    # platform ignores, silently dropping the real one. It must be treated as one.
+    class P:
+        CAPABILITIES = "data-source"
+
+    assert capabilities(P()) == {"data-source"}
+
+
 def test_infers_config_and_data_source_and_tools_and_actions():
     class P:
         CONFIG_SCHEMA = [{"key": "X", "type": "string"}]
