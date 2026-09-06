@@ -3,9 +3,12 @@
 All notable changes to `minder-plugin-sdk`. Pre-1.0: the contract may still
 evolve; changes are additive and backwards-compatible where possible.
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-09-06
 
-Initial SDK.
+Initial SDK. (Note: v0.1.1–v0.1.4 were interim tags used during active
+development and have been retired — this repo isn't incrementing routine
+releases until the SDK's scope is actually finished, at which point normal
+versioning resumes. Everything those tags contained is included here.)
 
 ### Contract
 - `Plugin` Protocol + `PluginMetadata` (with `api_version`) — the lifecycle the
