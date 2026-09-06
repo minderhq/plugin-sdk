@@ -37,6 +37,10 @@ class PluginMetadata:
     registered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     # Contract version this plugin targets — lets the platform negotiate and evolve
     # without breaking older plugins (see RFC 0001). Unknown → treat as v1.
+    # Intentionally a DIFFERENT string family from the declarative manifest's
+    # `minder.dev/v1alpha1` (schemas/manifest.schema.json) -- the two plugin
+    # surfaces version independently (this one stable, the manifest still
+    # experimental); don't copy one into the other (#17).
     api_version: str = "minder.dev/v1"
 
 

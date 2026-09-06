@@ -7,7 +7,7 @@
     "apiVersion": {
       "type": "string",
       "enum": ["minder.dev/v1alpha1"],
-      "description": "API version for the manifest"
+      "description": "API version for this declarative manifest format. Intentionally versioned separately from the Python plugin contract's api_version (minder.dev/v1, see contract.py) -- this format is still experimental; don't reuse one string for the other (#17)."
     },
     "kind": {
       "type": "string",
