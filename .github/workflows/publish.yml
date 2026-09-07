@@ -41,4 +41,9 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      # SHA-pinned, not the mutable `release/v1` branch ref this action
+      # publishes its docs under (org convention since the TruffleHog
+      # CVE-2026-33634 incident) -- verified via releases/latest -> git/tags
+      # (an annotated tag here, dereferenced through git/tags/<sha> to the
+      # actual commit) against the same v1.14.2 the branch currently points to.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
