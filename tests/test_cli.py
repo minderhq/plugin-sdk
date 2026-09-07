@@ -86,6 +86,28 @@ def test_load_plugin_class_raises_without_a_plugin_class(tmp_path):
         cli._load_plugin_class(_write(tmp_path, "no_class.py", NO_CLASS))
 
 
+def test_load_plugin_class_supports_a_package_with_a_relative_import(tmp_path):
+    """A package-style plugin (an __init__.py that imports a sibling file via
+    a relative import) must load as a real package -- a bare file-location
+    load (module named "__init__", no search locations) leaves __package__
+    unset, and "from .helper import ..." raises "attempted relative import
+    with no known parent package"."""
+    plugin_dir = tmp_path / "mypkg"
+    plugin_dir.mkdir()
+    (plugin_dir / "helper.py").write_text("VALUE = 42\n", encoding="utf-8")
+    (plugin_dir / "__init__.py").write_text(
+        VALID_MODULE_ALL.replace(
+            "from minder_plugin_sdk import PluginBase, PluginMetadata\n",
+            "from minder_plugin_sdk import PluginBase, PluginMetadata\n"
+            "from .helper import VALUE\n\n"
+            "assert VALUE == 42\n",
+        ),
+        encoding="utf-8",
+    )
+    cls = cli._load_plugin_class(plugin_dir / "__init__.py")
+    assert cls.__name__ == "MyPlugin"
+
+
 # ── validate ─────────────────────────────────────────────────────────────────
 def test_validate_ok_plugin_returns_zero(tmp_path, capsys):
     rc = cli.main(["validate", str(_write(tmp_path, "ok_plugin.py", VALID_MODULE_ALL))])

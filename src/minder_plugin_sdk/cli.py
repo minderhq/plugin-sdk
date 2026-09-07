@@ -55,7 +55,21 @@ class {cls}(PluginBase):
 
 
 def _load_plugin_class(path: Path) -> Any:
-    spec = importlib.util.spec_from_file_location(path.stem, path)
+    if path.name == "__init__.py":
+        # A package-style plugin (more than one file, e.g. an __init__.py
+        # that imports a sibling helpers.py). A bare file-location load
+        # here would name the module "__init__" with no search locations,
+        # leaving __package__ unset -- any "from .sibling import ..." in
+        # it then fails with "attempted relative import with no known
+        # parent package". Naming it after the plugin's own directory and
+        # giving it that directory as a submodule search path makes it a
+        # real package, so relative imports among its own files resolve.
+        name = path.parent.name
+        spec = importlib.util.spec_from_file_location(
+            name, path, submodule_search_locations=[str(path.parent)]
+        )
+    else:
+        spec = importlib.util.spec_from_file_location(path.stem, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot import {path}")
     module = importlib.util.module_from_spec(spec)
