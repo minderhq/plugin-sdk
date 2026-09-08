@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a new capability or enhancement
+title: "[feature]: "
+type: Feature
+labels: ["status:triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem does this solve for plugin authors? Who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      multiple: true
+      options:
+        - contract.py / capabilities()
+        - schema.py / resolve_config_schema() / fields_to_json_schema()
+        - CLI (minder-plugin validate, etc.)
+        - manifest schema
+        - packaging / distribution
+        - docs
+        - not sure
