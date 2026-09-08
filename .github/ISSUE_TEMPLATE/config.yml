@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: minderhq/plugins (the plugin catalog)
+    url: https://github.com/minderhq/plugins
+    about: If this is about a specific plugin's behavior rather than the SDK itself, it may belong there instead.
+  - name: RFC 0001 (extensible plugin contract)
+    url: https://github.com/minderhq/plugin-sdk/blob/main/docs/rfc/0001-extensible-plugin-contract.md
+    about: The design doc behind capabilities(), resolve_config_schema(), and the API version scheme.
