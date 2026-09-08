@@ -27,13 +27,35 @@ jobs:
     runs-on: ${{ github.event_name == 'push' && fromJSON('["self-hosted","Linux","X64","org-shared"]') || 'ubuntu-latest' }}
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ${{ fromJSON(github.event_name == 'push' && '["system"]' || '["3.11", "3.12"]') }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify system Python
+        # Self-hosted runner (Debian 13/trixie): actions/setup-python has no
+        # hosted-tool-cache build for this distro -- only python3.13 is
+        # installed persistently, so a real 3.11/3.12 matrix isn't possible
+        # here (mirrors minderhq/minder's ci.yml fix for the same gap).
+        if: matrix.python-version == 'system'
+        run: python3 --version
+
       - uses: actions/setup-python@v5
+        if: matrix.python-version != 'system'
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+
+      - name: Create isolated virtualenv
+        # Self-hosted runner registrations are shared, persistent boxes -- an
+        # unscoped `pip install -e .` would mutate system-wide packages
+        # another concurrent job could read mid-install, and Debian 13 also
+        # blocks a bare system-wide `pip install` via PEP 668
+        # (externally-managed-environment) without a venv.
+        if: matrix.python-version == 'system'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
       - run: pip install -e ".[dev,examples]"
       - name: Lint
         run: |
