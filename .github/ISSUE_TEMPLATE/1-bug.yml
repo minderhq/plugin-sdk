@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a defect — existing behavior is wrong or broken
+title: "[bug]: "
+type: Bug
+labels: ["status:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A maintainer will triage and label this during review.
+  - type: textarea
+    id: description
+    attributes:
+      label: What's wrong?
+      description: A clear description of the defect.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction (plugin code + the SDK call that misbehaves)
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      multiple: true
+      options:
+        - contract.py / capabilities()
+        - schema.py / resolve_config_schema() / fields_to_json_schema()
+        - CLI (minder-plugin validate, etc.)
+        - manifest schema
+        - packaging / distribution
+        - docs
+        - not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: minder-plugin-sdk version
+      description: e.g. from `pip show minder-plugin-sdk`
+    validations:
+      required: true
