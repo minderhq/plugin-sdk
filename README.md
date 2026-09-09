@@ -12,6 +12,10 @@ manifest JSON Schema, and a complete worked reference plugin.
 
 Licensed under **Apache-2.0**.
 
+Full docs: the [plugin authoring guide](https://minderhq.github.io/docs/plugins/authoring/),
+the [contract reference](https://minderhq.github.io/docs/plugins/contract/), and
+[manifest plugins](https://minderhq.github.io/docs/plugins/manifest/) on the docs site.
+
 ## Install
 
 ```bash
