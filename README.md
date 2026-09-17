@@ -110,9 +110,14 @@ an `AI_TOOLS` function-calling tool. Depends only on `httpx` + this SDK.
 
 A separate, declarative mechanism for `webhook → store-vector` ingestion — a YAML
 manifest that supplies **parameters only** (no code). Its JSON Schema (draft-07)
-is [`src/minder_plugin_sdk/schemas/manifest.schema.json`](src/minder_plugin_sdk/schemas/manifest.schema.json). Most plugins are
-module plugins (above); reach for a manifest when you just need to pipe a webhook
-into the vector store.
+is [`src/minder_plugin_sdk/schemas/manifest.schema.json`](src/minder_plugin_sdk/schemas/manifest.schema.json). This is the
+**installable, runtime** shape most **third-party** integrations should use rather
+than an in-process code plugin — see
+[`docs/plugins/webhook-vs-code-plugin.md`](docs/plugins/webhook-vs-code-plugin.md)
+for which shape to pick. Reach for a manifest when you just need to pipe a webhook
+into the vector store; add a small `handle_webhook` handler
+([`examples/webhook_plugin.py`](examples/webhook_plugin.py)) only when a payload
+needs reshaping first.
 
 ## Scaling to any plugin (RFC 0001)
 
@@ -163,6 +168,8 @@ minder-plugin inspect  my_plugin.py     # capabilities + compiled config/UI sche
 - [`minimal_plugin.py`](examples/minimal_plugin.py) — the smallest data source (`PluginBase`).
 - [`ai_tool_plugin.py`](examples/ai_tool_plugin.py) — an AI-tool-only plugin.
 - [`discord_manifest.yaml`](examples/discord_manifest.yaml) — a manifest plugin.
+- [`webhook_manifest.yaml`](examples/webhook_manifest.yaml) — a manifest + webhook plugin (the installable third-party shape).
+- [`webhook_plugin.py`](examples/webhook_plugin.py) — a `handle_webhook` handler stub (request/response contract).
 
 ## Develop
 
