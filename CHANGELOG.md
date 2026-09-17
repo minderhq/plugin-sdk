@@ -3,6 +3,16 @@
 All notable changes to `minder-plugin-sdk`. Pre-1.0: the contract may still
 evolve; changes are additive and backwards-compatible where possible.
 
+## [Unreleased]
+
+### Examples & docs
+- Webhook-mode plugin example: `examples/webhook_manifest.yaml` (the installable
+  manifest + webhook shape) and `examples/webhook_plugin.py` (a `handle_webhook`
+  handler stub documenting the request/response contract).
+- `docs/plugins/webhook-vs-code-plugin.md` — steers third-party authors to the
+  manifest + webhook shape vs. the in-process code-plugin shape (when to use
+  which). Mirrors the runtime-plugin-loading ADR (Recommendation point 2).
+
 ## [0.1.0] — 2026-09-06
 
 Initial SDK. (Note: v0.1.1–v0.1.4 were interim tags used during active

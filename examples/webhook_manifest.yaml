@@ -1,0 +1,31 @@
+# A webhook-mode plugin: a declarative inbound webhook -> store-vector pipeline,
+# installable at runtime with NO code compiled into Minder. This is the shape
+# most third-party integrations should use instead of an in-process code plugin
+# (see docs/plugins/webhook-vs-code-plugin.md and examples/webhook_plugin.py).
+# Validate with:  minder-plugin validate examples/webhook_manifest.yaml
+apiVersion: minder.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: issue-webhook
+  version: 0.1.0
+  description: Ingest issue-tracker webhooks into the vector store
+spec:
+  trigger:
+    type: webhook
+    webhook:
+      # Minder exposes this path; the external system POSTs deliveries to it.
+      path: /issues/webhook
+      # Name of the shared secret Minder checks before accepting a delivery —
+      # a reference into the secrets store, never the secret value itself.
+      secretRef: issue.webhook.secret
+  action:
+    type: store-vector
+    store:
+      collection: issue-events
+      input:
+        # Templated straight from the payload — no code needed for this case.
+        text: "{{ .issue.title }}\n\n{{ .issue.body }}"
+        metadata:
+          number: "{{ .issue.number }}"
+          state: "{{ .issue.state }}"
+          action: "{{ .action }}"
