@@ -42,6 +42,7 @@ def test_plugin_base_gives_working_defaults():
         ("weather_plugin", "WeatherPlugin"),
         ("minimal_plugin", "MinimalPlugin"),
         ("ai_tool_plugin", "UnitConverterPlugin"),
+        ("webhook_plugin", "IssueWebhookPlugin"),
     ],
 )
 def test_check_plugin_passes_on_examples(module, cls):
@@ -119,6 +120,37 @@ def test_manifest_validates_the_example_and_rejects_garbage():
     assert m["metadata"]["name"] == "discord-ingestor"
     with pytest.raises(ManifestError):
         validate_manifest({"kind": "Plugin"})  # missing apiVersion/metadata/spec
+
+
+def test_webhook_manifest_example_validates():
+    text = (EXAMPLES / "webhook_manifest.yaml").read_text(encoding="utf-8")
+    m = validate_manifest(text)
+    assert m["metadata"]["name"] == "issue-webhook"
+    assert m["spec"]["trigger"]["type"] == "webhook"
+    assert m["spec"]["action"]["type"] == "store-vector"
+
+
+# ── webhook handler stub ─────────────────────────────────────────────────────────
+def test_webhook_plugin_handle_webhook_contract():
+    from webhook_plugin import IssueWebhookPlugin  # type: ignore
+    from minder_plugin_sdk import WebhookHandler, capabilities
+
+    p = IssueWebhookPlugin()
+    assert isinstance(p, WebhookHandler)  # implements the webhook-ingest protocol
+    assert "webhook-ingest" in capabilities(p)
+
+    record = asyncio.run(
+        p.handle_webhook(
+            {
+                "action": "opened",
+                "issue": {"number": 7, "title": "Bug", "body": "x", "state": "open"},
+            }
+        )
+    )
+    assert record["text"].startswith("Bug")
+    assert record["metadata"] == {"number": 7, "state": "open", "action": "opened"}
+    # a payload we don't ingest is acknowledged with an empty record (store nothing)
+    assert asyncio.run(p.handle_webhook({"zen": "ping"})) == {}
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
