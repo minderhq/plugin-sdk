@@ -39,24 +39,22 @@ jobs:
         if: matrix.python-version == 'system'
         run: python3 --version
 
-      - uses: actions/setup-python@v5
-        if: matrix.python-version != 'system'
+      - name: Set up uv
+        # SHA-pinned (org convention since the TruffleHog CVE-2026-33634
+        # incident). Pins the matrix Python via UV_PYTHON (uv fetches a managed
+        # build); the `system` leg passes none, so uv uses the runner's python3.
+        # activate-environment creates a venv (outside the checkout, so
+        # black/flake8/mypy never scan it) and puts it on PATH for later steps
+        # -- `uv pip install` needs a venv rather than the system interpreter.
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+          python-version: ${{ matrix.python-version != 'system' && matrix.python-version || '' }}
+          activate-environment: true
+          venv-path: ${{ runner.temp }}/venv
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
 
-      - name: Create isolated virtualenv
-        # Self-hosted runner registrations are shared, persistent boxes -- an
-        # unscoped `pip install -e .` would mutate system-wide packages
-        # another concurrent job could read mid-install, and Debian 13 also
-        # blocks a bare system-wide `pip install` via PEP 668
-        # (externally-managed-environment) without a venv.
-        if: matrix.python-version == 'system'
-        run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
-          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
-
-      - run: pip install -e ".[dev,examples]"
+      - run: uv pip install -e ".[dev,examples]"
       - name: Lint
         run: |
           black --check src tests examples
@@ -66,6 +64,4 @@ jobs:
       - name: Test
         run: pytest -q
       - name: Build
-        run: |
-          pip install build
-          python -m build
+        run: uv build
