@@ -6,9 +6,8 @@ so this guide is the decision, up front, with a worked example of each.
 > **Short version:** if you are a **third party** integrating an external system,
 > reach for the **manifest + webhook** shape. Write an **in-process code plugin**
 > only when the behaviour is genuinely first-party and has to run inside the
-> platform. This mirrors the runtime-plugin-loading ADR
-> ([`minderhq/adrs` › `decisions/runtime-plugin-loading.md`](https://github.com/minderhq/adrs/blob/main/decisions/runtime-plugin-loading.md),
-> Recommendation point 2): third-party plugins are **installed**, not compiled in,
+> platform. This mirrors Minder's runtime-plugin-loading architecture decision
+> (an internal ADR, recommendation point 2): third-party plugins are **installed**, not compiled in,
 > and run **no arbitrary uploaded code**.
 
 ## The two shapes

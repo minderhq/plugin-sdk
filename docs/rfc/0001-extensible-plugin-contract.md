@@ -1,6 +1,6 @@
 # RFC 0001 — An extensible plugin contract that scales to thousands of plugin types
 
-> Status: **Draft** · Tracks: [minderhq/minder#1263](https://github.com/minderhq/minder/issues/1263)
+> Status: **Draft** · Tracked in Minder core
 >
 > The problem, stated plainly: **every plugin's needs are different, and there
 > could be thousands of types.** A fixed lifecycle + a flat `CONFIG_SCHEMA` with a

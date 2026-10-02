@@ -7,8 +7,8 @@ manifest JSON Schema, and a complete worked reference plugin.
 > Minder is a self-hostable, local-first AI platform (RAG + knowledge graph +
 > local LLMs) extended by **plugins**. Plugins are **manifest-based and run no
 > arbitrary uploaded code** — new actions are fixed, reviewed handlers. This repo
-> is everything a third party needs to write one; the core platform lives at
-> [`minderhq/minder`](https://github.com/minderhq/minder).
+> is everything a third party needs to write one; the core platform is
+> documented at [minderhq.github.io/docs](https://minderhq.github.io/docs/).
 
 Licensed under **Apache-2.0**.
 
@@ -84,8 +84,7 @@ A field with none of these renders as a plain input, so existing schemas keep
 working. See [`examples/weather_plugin.py`](examples/weather_plugin.py): a
 `textarea` for locations, a `toggle` for the sink, and a `WEATHER_DEFAULT_CITY`
 **autocomplete** backed by a `search_cities` read-only action — plus a `DISPLAY`
-logo. (Client + registry wiring tracked in
-[minderhq/minder#1262](https://github.com/minderhq/minder/issues/1262).)
+logo. (Client + registry wiring is tracked in Minder core.)
 
 ## Gotchas (read these)
 
@@ -183,5 +182,5 @@ pytest && black --check src tests examples && flake8 src tests examples && mypy 
 Community plugins are catalogued at
 [`minderhq/plugins`](https://github.com/minderhq/plugins). Scaffold a new one from
 [`minderhq/plugin-template`](https://github.com/minderhq/plugin-template) (compiles
-against this SDK). Design and roadmap discussion lives on the
-[Minder tracker](https://github.com/minderhq/minder/issues).
+against this SDK). Design and roadmap discussion lives in
+[Discussions](https://github.com/minderhq/plugin-sdk/discussions).
