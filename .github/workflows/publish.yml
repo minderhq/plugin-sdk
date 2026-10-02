@@ -18,7 +18,7 @@ jobs:
     name: Build sdist + wheel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # SHA-pinned like the publish action below. No dependency cache: this is
       # a release build, so it resolves the build backend fresh rather than
       # from a cache another run could have written.
@@ -27,7 +27,7 @@ jobs:
           python-version: "3.12"
           enable-cache: false
       - run: uv build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -40,7 +40,7 @@ jobs:
     permissions:
       id-token: write # required for Trusted Publishing (OIDC)
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
