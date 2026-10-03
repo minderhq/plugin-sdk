@@ -25,8 +25,10 @@ class PluginBase:
     ACTIONS: FrozenSet[str] = frozenset()
 
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
-        # ``config`` is the storage-backend config the registry injects
-        # (config["postgres"], config["influxdb"], …).
+        # ``config`` is the backend config the registry injects: "redis",
+        # "influxdb" and, only when the operator has configured it, "database"
+        # (a least-privilege role confined to the "plugin_data" schema; no
+        # access to platform tables). Use config.get("database"); it may be absent.
         self.config: Dict[str, Any] = config or {}
         self.status: str = "registered"
         self._last: Dict[str, Any] = {}

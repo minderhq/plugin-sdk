@@ -94,9 +94,28 @@ logo. (Client + registry wiring is tracked in Minder core.)
   defines `register`. Export exactly the plugin class via `__all__`.
 - **Only `ACTIONS` names are reachable** over HTTP — nothing else on the instance.
   Reads go through `/collect` + `/analysis`; `ACTIONS` is for state changes.
-- **Storage config is injected** by the registry as `config["<backend>"]` (e.g.
-  `config["influxdb"]`, `config["postgres"]`, `config["qdrant"]`) — read it from
-  `self.config`, don't hard-wire hosts.
+- **Backend config is injected** by the registry into `self.config`: `redis`,
+  `influxdb` and, when available, `database`. There is **no** `postgres` or
+  `qdrant` key — read what you need from `self.config` and don't hard-wire hosts.
+  Don't read `POSTGRES_*` (or other platform credentials) from the environment
+  either.
+- **`config["database"]` is a least-privilege Postgres handle**, not the
+  platform's database credentials:
+
+  ```python
+  {"host": ..., "port": ..., "user": "minder_plugins", "password": ...,
+   "database": ..., "schema": "plugin_data"}
+  ```
+
+  - The role only has its own schema (`plugin_data`) and has **no access to
+    platform tables**.
+  - Its `search_path` is pinned to `plugin_data`, so an unqualified
+    `CREATE TABLE` lands there, owned by the plugin. `schema` is passed
+    explicitly too, so you can schema-qualify your own DDL.
+  - **The key may be missing.** If the operator hasn't configured the plugin
+    database role, no `database` key is injected at all. Use
+    `self.config.get("database")` and degrade gracefully (disable the feature
+    or report it in `health_check()`) instead of raising `KeyError`.
 
 ## Worked example
 

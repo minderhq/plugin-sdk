@@ -12,6 +12,9 @@ evolve; changes are additive and backwards-compatible where possible.
 - `docs/plugins/webhook-vs-code-plugin.md` — steers third-party authors to the
   manifest + webhook shape vs. the in-process code-plugin shape (when to use
   which). Mirrors the runtime-plugin-loading ADR (Recommendation point 2).
+- README: the registry injects `config["database"]` (a least-privilege role
+  confined to the `plugin_data` schema, absent unless configured), not
+  `config["postgres"]`/`config["qdrant"]` (#41).
 
 ## [0.1.0] — 2026-09-06
 
