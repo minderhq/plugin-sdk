@@ -6,7 +6,10 @@ Modules: ``contract`` (Plugin Protocol + PluginMetadata + CONFIG_SCHEMA / ACTION
 / AI_TOOLS / DISPLAY extension points) · ``base`` (PluginBase convenience class) ·
 ``schema`` (JSON-Schema config: compile, resolve, validate) · ``capabilities``
 (the capability model + per-capability protocols) · ``ai_tools`` · ``manifest`` ·
-``harness`` (test helpers) · ``errors``. Design: ``docs/rfc/0001-*``. CLI:
+``harness`` (test helpers, ``FakePlatformContext``) · ``errors`` · ``context``
+(the platform context, contract v2) · ``declarations`` (``CONTRACT_VERSION``,
+``MANAGES``, ``EGRESS``, ``TIMESERIES``) · ``source_rules`` · ``safe_http``
+(SSRF-guarded outbound HTTP; needs httpx). Design: ``docs/rfc/0001-*``. CLI:
 ``minder-plugin``. Worked plugins in ``examples/``.
 """
 
@@ -21,9 +24,29 @@ from .capabilities import (
     WebhookHandler,
     capabilities,
 )
+from .context import (
+    HOST_CAPABILITIES,
+    UNBOUND_CONTEXT,
+    PlatformContext,
+    capability_granted,
+)
 from .contract import Plugin, PluginMetadata
-from .errors import ConfigError, ManifestError, PluginError
-from .harness import check_plugin, run_lifecycle
+from .declarations import (
+    SUPPORTED_CONTRACT_VERSION,
+    contract_version,
+    declaration_errors,
+)
+from .errors import (
+    CapabilityDenied,
+    CapabilityError,
+    CapabilityInvalid,
+    CapabilityUnavailable,
+    ConfigError,
+    ManifestError,
+    PluginError,
+    UnsafeURLError,
+)
+from .harness import FakePlatformContext, check_plugin, run_lifecycle
 from .influx import (
     escape_tag,
     latest_influx_date,
@@ -55,6 +78,14 @@ __all__ = [
     "PluginMetadata",
     "PluginBase",
     "API_VERSION",
+    # platform context (contract v2)
+    "PlatformContext",
+    "UNBOUND_CONTEXT",
+    "HOST_CAPABILITIES",
+    "capability_granted",
+    "SUPPORTED_CONTRACT_VERSION",
+    "contract_version",
+    "declaration_errors",
     # capabilities
     "capabilities",
     "KNOWN_CAPABILITIES",
@@ -91,10 +122,16 @@ __all__ = [
     # testing
     "check_plugin",
     "run_lifecycle",
+    "FakePlatformContext",
     # errors
     "PluginError",
     "ConfigError",
     "ManifestError",
+    "CapabilityError",
+    "CapabilityDenied",
+    "CapabilityUnavailable",
+    "CapabilityInvalid",
+    "UnsafeURLError",
     "__version__",
 ]
 

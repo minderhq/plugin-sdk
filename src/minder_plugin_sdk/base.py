@@ -5,11 +5,16 @@ Inheriting is never required (the registry duck-types on ``register``), but
 overrides what it actually needs — often just ``register`` and ``collect_data``.
 It also wires the standard config flow (default → env → persisted → apply_config)
 so a plugin gets runtime-editable config for free.
+
+It also provides the contract-v2 ``bind_context`` hook: the host calls
+``bind_context(ctx)`` and the plugin reaches the platform through ``self.ctx``
+(see ``context.py``). Unbound, ``self.ctx`` raises ``CapabilityUnavailable``.
 """
 
 import os
 from typing import Any, Dict, FrozenSet, List, Optional
 
+from .context import UNBOUND_CONTEXT, PlatformContext
 from .contract import PluginMetadata
 from .schema import resolve_effective_config
 
@@ -24,6 +29,10 @@ class PluginBase:
     CONFIG_SCHEMA: List[Any] = []
     ACTIONS: FrozenSet[str] = frozenset()
 
+    # The platform context (contract v2). A class-level default so it exists even
+    # when a subclass overrides __init__ without calling super().__init__().
+    ctx: PlatformContext = UNBOUND_CONTEXT
+
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         # ``config`` is the backend config the registry injects: "redis",
         # "influxdb" and, only when the operator has configured it, "database"
@@ -35,6 +44,13 @@ class PluginBase:
         # Seed settings from defaults+env via the one config→state path; the
         # registry re-applies with persisted (API-set) overrides after load.
         self.apply_config(resolve_effective_config(self, env=os.environ))
+
+    def bind_context(self, ctx: PlatformContext) -> None:
+        """Called by the host when it loads the plugin, to hand over its platform
+        context. Hosts may bind again (e.g. after a restart), so keep using
+        ``self.ctx`` rather than caching sub-objects. Override to react to
+        binding, and call ``super().bind_context(ctx)``."""
+        self.ctx = ctx
 
     # ── lifecycle (override as needed) ────────────────────────────────────────
     async def register(self) -> PluginMetadata:  # pragma: no cover - must override

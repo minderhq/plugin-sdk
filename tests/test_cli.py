@@ -145,6 +145,29 @@ def test_inspect_prints_json_report(tmp_path, capsys):
     assert isinstance(report["capabilities"], list)
     for key in ("capabilities", "requires", "config_schema", "ui_schema", "ai_tools"):
         assert key in report
+    # a plugin with no contract-v2 declarations reports contract 1
+    assert report["contract_version"] == 1
+    assert report["manages"] == [] and report["egress"] is None
+
+
+def test_inspect_reports_contract_v2_declarations(tmp_path, capsys):
+    import json
+
+    src = VALID_MODULE_ALL.replace(
+        "class MyPlugin(PluginBase):\n",
+        "class MyPlugin(PluginBase):\n"
+        "    CONTRACT_VERSION = 2\n"
+        '    MANAGES = ["telegraf"]\n'
+        '    EGRESS = "lan"\n'
+        '    TIMESERIES = {"measurements": ["m"]}\n\n',
+    )
+    rc = cli.main(["inspect", str(_write(tmp_path, "insp2.py", src))])
+    assert rc == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["contract_version"] == 2
+    assert report["manages"] == ["telegraf"]
+    assert report["egress"] == "lan"
+    assert report["timeseries"] == {"measurements": ["m"]}
 
 
 # ── scaffold ─────────────────────────────────────────────────────────────────
