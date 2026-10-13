@@ -15,6 +15,7 @@ from typing import Any, List, Optional
 
 from .ai_tools import build_tool_definitions
 from .capabilities import capabilities
+from .declarations import contract_version
 from .harness import check_plugin
 from .manifest import validate_manifest
 from .requirements import requirements
@@ -114,6 +115,10 @@ def _cmd_inspect(path: Path) -> int:
         "ui_schema": ui,
         "ai_tools": build_tool_definitions(plugin),
         "display": getattr(type(plugin), "DISPLAY", {}),
+        "contract_version": contract_version(plugin),
+        "manages": list(getattr(plugin, "MANAGES", None) or []),
+        "egress": getattr(plugin, "EGRESS", None),
+        "timeseries": getattr(plugin, "TIMESERIES", None),
     }
     print(json.dumps(report, indent=2, default=str))
     return 0

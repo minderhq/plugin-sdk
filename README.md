@@ -117,6 +117,151 @@ logo. (Client + registry wiring is tracked in Minder core.)
     `self.config.get("database")` and degrade gracefully (disable the feature
     or report it in `health_check()`) instead of raising `KeyError`.
 
+## Platform context (contract v2)
+
+Plugins may run in a separate process from the platform (out-of-process
+execution). That process holds **no platform credentials** and cannot reach
+platform services directly, so a plugin asks the platform for what it needs
+through **`self.ctx`**, the platform context. The platform checks every call
+against a grant for the current invocation: this plugin, the invoking
+tenant/owner, and the capabilities the plugin declared. The same plugin code
+works whether it runs in-process or out-of-process.
+
+Contract v2 is **opt-in and additive**. A plugin that declares none of the
+attributes below is a contract-v1 plugin and keeps working unchanged.
+
+```python
+from minder_plugin_sdk import (
+    CapabilityDenied, CapabilityUnavailable, PluginBase, PluginMetadata,
+)
+from minder_plugin_sdk.safe_http import safe_request
+
+
+class CrawlerPlugin(PluginBase):
+    CONTRACT_VERSION = 2                 # "I use self.ctx"
+    EGRESS = "public"                    # or "lan", or ["api.example.com", "*.example.org"]
+    REQUIRES = {"bundles": ["rag"]}      # documents.index needs the rag bundle
+    ACTIONS = frozenset({"ingest"})
+
+    async def register(self) -> PluginMetadata:
+        return PluginMetadata(name="crawler", version="1.0.0",
+                              description="Index a web page", author="you")
+
+    async def ingest(self, url: str, kb_id: str) -> dict:
+        page = await safe_request("GET", url)          # SSRF-guarded fetch
+        return await self.ctx.documents.index(
+            kb_id, "page.html", page.content, "text/html")
+
+    async def health_check(self) -> dict:
+        # Optional features: switch on what is granted, degrade otherwise.
+        return {"healthy": self.status == "ready",
+                "indexing": self.ctx.has("documents.index")}
+```
+
+**What `self.ctx` offers** (every call is `async`):
+
+| Call | Capability | Notes |
+|------|------------|-------|
+| `await ctx.secrets.get(key)` | `secrets.read` | This plugin's own secret for the invoking tenant, or `None` if unset. |
+| `await ctx.plugins.invoke(plugin, action, **kw)` | `plugins.invoke` | Only along a declared `PluginMetadata.dependencies` edge. |
+| `await ctx.documents.index(kb_id, filename, content, content_type)` | `documents.index` | Uploads on behalf of the invoking user. |
+| `await ctx.telegraf.set_managed_region(toml)` / `clear_managed_region()` / `reload(force=False)` | `telegraf.*` | Only for plugins with `MANAGES = ["telegraf"]`. The platform validates the TOML (allowlisted inputs, size caps) and writes it atomically. |
+| `ctx.has(capability)` | — | Whether a capability is granted (`"telegraf"` matches any `telegraf.*`). |
+
+**Errors** (all subclasses of `PluginError`; messages name the capability and a
+reason, never the secret or payload):
+
+- `CapabilityDenied`: not granted for this invocation (undeclared, wrong
+  owner/tenant, expired, undeclared plugin edge). Retrying won't help.
+- `CapabilityUnavailable`: cannot be served right now. This is also what an
+  **unbound** context raises (a contract-v1 host, or a test without a fake), so
+  catch it to degrade cleanly.
+- `CapabilityInvalid`: the platform rejected the arguments.
+
+**Binding.** The host calls `plugin.bind_context(ctx)` when it loads the
+plugin. `PluginBase` implements it; a plain duck-typed class can define its own
+`bind_context(self, ctx)` and store `self.ctx`. Before binding,
+`PluginBase.ctx` is `UNBOUND_CONTEXT`.
+
+**Declarations** (optional class attributes, checked by `check_plugin`):
+
+| Attribute | Shape | Meaning |
+|-----------|-------|---------|
+| `CONTRACT_VERSION` | `int` (default `1`) | `2` = uses `self.ctx`. A host refuses a plugin that declares a newer version than it supports, and `check_plugin` flags versions above `SUPPORTED_CONTRACT_VERSION`. |
+| `MANAGES` | `list[str]` | Platform-managed sidecars the plugin configures through `ctx.<name>.*` (currently `"telegraf"`). Requires `CONTRACT_VERSION = 2`. |
+| `EGRESS` | `"public"`, `"lan"`, or a list of host patterns | Where the plugin connects. Patterns are hostnames (`"api.example.com"`) or one-level wildcards (`"*.example.com"`); no scheme, port, path or IP. |
+| `TIMESERIES` | `{"measurements": [...]}` | The time-series measurements the plugin writes. Declared only, for now. |
+
+**Rules for plugin code** (enforced by `check_plugin` / `minder-plugin validate`):
+
+- **Don't read platform secrets from the environment.** `os.environ[...]`,
+  `os.environ.get(...)` and `os.getenv(...)` of platform-credential names are
+  flagged: `JWT_SECRET`, `NEO4J_AUTH`, `POSTGRES_PASSWORD`, `DB_*`, `REDIS_*`,
+  anything ending in `_TOKEN`, `_SECRET` or `_PASSWORD`, and so on. Keys
+  declared in your own `CONFIG_SCHEMA` are your configuration and are allowed;
+  use `"secret": True` there, or `ctx.secrets.get(...)`.
+- **Don't import platform internals** (`core.*`). Talk to the platform only
+  through this SDK.
+- **Return JSON-serialisable results** from actions and lifecycle methods; they
+  may cross a process boundary.
+- **Don't share memory between plugins.** Use `ctx.plugins.invoke(...)` along a
+  declared dependency instead of reaching into another plugin's instance.
+
+The source scan is syntactic and best-effort: names built at runtime aren't
+seen, so the rules still apply where the checker can't look.
+
+### `safe_http`: outbound HTTP for URLs you don't control
+
+`minder_plugin_sdk.safe_http.safe_request(method, url, ...)` applies the
+platform's egress rules in the plugin. Use it for any configured or
+user-supplied URL. It needs `httpx`; the rest of the SDK stays dependency-free.
+
+- Allows `http`/`https` only, and refuses URLs with embedded credentials.
+- Resolves the host and refuses it if **any** address is non-public. That
+  covers loopback, private, link-local and cloud metadata, CGNAT, multicast,
+  reserved ranges, and IPv4 embedded in IPv6.
+- Pins the connection to the checked address. TLS is still verified against the
+  hostname.
+- Follows redirects only for `GET`/`HEAD`, re-checks **every** hop, and drops
+  `Authorization`/`Cookie` when a redirect goes to another host.
+- Caps the body (`max_bytes`, default 10 MiB) and the number of redirects
+  (default 5).
+- Takes `allowed_hosts=` (e.g. your `EGRESS` list) to also restrict which hosts
+  may be contacted.
+- `check_url(url)` gives you the check alone.
+
+### Testing with `FakePlatformContext`
+
+```python
+import asyncio
+from minder_plugin_sdk import CapabilityDenied, FakePlatformContext, run_lifecycle
+
+def test_ingest_indexes_the_page():
+    ctx = FakePlatformContext(grants={"documents.index"})
+    plugin = CrawlerPlugin()
+    plugin.bind_context(ctx)
+    ...
+    assert ctx.indexed[0]["kb_id"] == "kb1"
+
+def test_secret_denied():
+    ctx = FakePlatformContext(secrets={"API_TOKEN": "t"}, grants=set())
+    # ctx.secrets.get(...) now raises CapabilityDenied
+    out = asyncio.run(run_lifecycle(MyPlugin(), ctx=ctx))   # binds ctx after register()
+```
+
+`FakePlatformContext` takes these options:
+
+- `secrets`: the secret values.
+- `grants`: the granted capabilities. `None`, the default, grants everything.
+- `denied` / `unavailable`: capabilities that always raise.
+- `invoke_results`: `{(plugin, action): value or callable}`.
+- `telegraf_validator`: a callable that raises `CapabilityInvalid` to simulate a
+  rejected region.
+
+It records every call in `ctx.calls` (secret *keys* only, never values; see
+`ctx.called("secrets.read")`), and keeps side effects in `ctx.indexed`,
+`ctx.telegraf_region` and `ctx.telegraf_reloads`.
+
 ## Worked example
 
 [`examples/weather_plugin.py`](examples/weather_plugin.py) is a complete,
@@ -166,7 +311,9 @@ The SDK is more than the contract — it ships the batteries a plugin author nee
 | Import | What |
 |--------|------|
 | `PluginBase` | Optional base class — sensible defaults for the whole lifecycle + the standard config flow, so a data-source plugin is just `register` + `collect_data`. |
-| `check_plugin(p)` / `run_lifecycle(p)` | Test helpers: contract violations as a list; drive the full lifecycle in a test. |
+| `check_plugin(p)` / `run_lifecycle(p, ctx=None)` | Test helpers: contract violations as a list; drive the full lifecycle in a test (optionally with a bound context). |
+| `FakePlatformContext` | In-memory platform context (contract v2) for unit tests: secrets, grants/denials, recorded calls. |
+| `safe_http.safe_request` / `check_url` | SSRF-guarded outbound HTTP (needs `httpx`). |
 | `resolve_config_schema` / `resolve_effective_config` / `validate_config` | Compile config to JSON Schema, resolve default→env→persisted, validate values. |
 | `build_tool_definitions` / `ai_tool_errors` | Turn `AI_TOOLS` into OpenAI/Ollama tool defs; validate they map to actions. |
 | `load_manifest` / `validate_manifest` | Parse + validate a `webhook → store-vector` manifest (bundled JSON Schema). |
