@@ -207,8 +207,12 @@ plugin. `PluginBase` implements it; a plain duck-typed class can define its own
 - **Don't share memory between plugins.** Use `ctx.plugins.invoke(...)` along a
   declared dependency instead of reaching into another plugin's instance.
 
-The source scan is syntactic and best-effort: names built at runtime aren't
-seen, so the rules still apply where the checker can't look.
+These checks are a **lint, not a security boundary**. The scan is syntactic
+and best-effort (names built at runtime aren't seen), so the rules still apply
+where the checker can't look. The actual protection comes from the platform:
+plugin code runs isolated, with no platform credentials and no route to
+platform services, and every `self.ctx` call is checked against the
+invocation's grant.
 
 ### `safe_http`: outbound HTTP for URLs you don't control
 
@@ -222,10 +226,16 @@ user-supplied URL. It needs `httpx`; the rest of the SDK stays dependency-free.
   reserved ranges, and IPv4 embedded in IPv6.
 - Pins the connection to the checked address. TLS is still verified against the
   hostname.
-- Follows redirects only for `GET`/`HEAD`, re-checks **every** hop, and drops
-  `Authorization`/`Cookie` when a redirect goes to another host.
+- Follows redirects only for `GET`/`HEAD` and re-checks **every** hop. A
+  redirect to another origin (scheme, host or port) drops **all** your
+  headers, and an `https` → `http` downgrade is refused.
+- Opens a fresh connection per hop, so a pinned connection is never reused for
+  another host.
 - Caps the body (`max_bytes`, default 10 MiB) and the number of redirects
-  (default 5).
+  (default 5). `timeout` (default 30 s) bounds the whole call; past it,
+  `TimeoutError` is raised.
+- The `client=` parameter exists for tests (mock transports); leave it unset in
+  plugin code.
 - Takes `allowed_hosts=` (e.g. your `EGRESS` list) to also restrict which hosts
   may be contacted.
 - `check_url(url)` gives you the check alone.
@@ -252,13 +262,19 @@ def test_secret_denied():
 `FakePlatformContext` takes these options:
 
 - `secrets`: the secret values.
-- `grants`: the granted capabilities. `None`, the default, grants everything.
+- `grants`: the granted capabilities. `None`, the default, grants everything,
+  which is more than the platform would. `FakePlatformContext.for_plugin(plugin,
+  dependencies=[...])` starts from what the plugin's declarations would be
+  granted instead (`secrets.read`; `plugins.invoke` with dependencies;
+  `documents.index` with the `rag` bundle; `telegraf.*` with
+  `MANAGES = ["telegraf"]`).
 - `denied` / `unavailable`: capabilities that always raise.
 - `invoke_results`: `{(plugin, action): value or callable}`.
 - `telegraf_validator`: a callable that raises `CapabilityInvalid` to simulate a
   rejected region.
 
-It records every call in `ctx.calls` (secret *keys* only, never values; see
+It records every call in `ctx.calls` with identifying arguments only (secret
+*keys*, never values; kwarg *names* for invokes; see
 `ctx.called("secrets.read")`), and keeps side effects in `ctx.indexed`,
 `ctx.telegraf_region` and `ctx.telegraf_reloads`.
 

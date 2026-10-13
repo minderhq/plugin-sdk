@@ -145,7 +145,9 @@ async def run_lifecycle(
 @dataclass
 class RecordedCall:
     """One capability call seen by :class:`FakePlatformContext`. ``args`` holds
-    identifying arguments only (a secret's key, never its value)."""
+    identifying arguments only: a secret's key (never its value), the target
+    plugin/action and the kwarg NAMES of an invoke, a document's kb/filename/
+    content type, a telegraf region's size."""
 
     capability: str
     args: Dict[str, Any] = field(default_factory=dict)
@@ -169,7 +171,8 @@ class _FakePlugins:
 
     async def invoke(self, plugin: str, action: str, **kwargs: Any) -> Any:
         self._fake._enter(
-            CAP_PLUGINS_INVOKE, {"plugin": plugin, "action": action, **kwargs}
+            CAP_PLUGINS_INVOKE,
+            {"plugin": plugin, "action": action, "kwargs": sorted(kwargs)},
         )
         key = (plugin, action)
         if key not in self._fake.invoke_results:
@@ -238,8 +241,10 @@ class FakePlatformContext:
     * ``secrets``: the plugin's secrets (``ctx.secrets.get(key)``; a missing key
       returns ``None``).
     * ``grants``: the granted capability names (``"secrets.read"``,
-      ``"telegraf"`` for all ``telegraf.*``, ...); ``None`` (default) grants
-      everything. An ungranted call raises ``CapabilityDenied``.
+      ``"telegraf"`` for all ``telegraf.*``, ...). An ungranted call raises
+      ``CapabilityDenied``. ``None`` (default) grants **everything**, which is
+      convenient but more than the platform would grant; use
+      :meth:`for_plugin` to start from the plugin's own declarations instead.
     * ``denied`` / ``unavailable``: capabilities that raise
       ``CapabilityDenied`` / ``CapabilityUnavailable`` regardless of grants.
     * ``invoke_results``: ``{(plugin, action): value-or-callable}`` for
@@ -281,6 +286,33 @@ class FakePlatformContext:
         self.plugins = _FakePlugins(self)
         self.documents = _FakeDocuments(self)
         self.telegraf = _FakeTelegraf(self)
+
+    @classmethod
+    def for_plugin(
+        cls,
+        plugin: Any,
+        dependencies: Iterable[str] = (),
+        **kwargs: Any,
+    ) -> "FakePlatformContext":
+        """A fake whose grants approximate what the platform derives from the
+        plugin's declarations (the platform remains authoritative):
+
+        * ``secrets.read`` always (a plugin's own secrets);
+        * ``plugins.invoke`` when ``dependencies`` (your
+          ``PluginMetadata.dependencies``) is non-empty;
+        * ``documents.index`` when ``REQUIRES`` lists the ``rag`` bundle;
+        * ``<name>.*`` for each name in ``MANAGES``.
+
+        Other keyword arguments are passed to the constructor."""
+        grants = {CAP_SECRETS_READ}
+        if list(dependencies):
+            grants.add(CAP_PLUGINS_INVOKE)
+        requires = getattr(plugin, "REQUIRES", None) or {}
+        if isinstance(requires, dict) and "rag" in (requires.get("bundles") or []):
+            grants.add(CAP_DOCUMENTS_INDEX)
+        for name in getattr(plugin, "MANAGES", None) or []:
+            grants.add(f"{name}.*")
+        return cls(grants=grants, **kwargs)
 
     def has(self, capability: str) -> bool:
         if capability_granted(self.denied, capability) or capability_granted(

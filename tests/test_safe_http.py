@@ -66,6 +66,9 @@ def run(coro):
         ("::ffff:93.184.216.34", True),
         ("64:ff9b::7f00:1", False),  # NAT64 → 127.0.0.1
         ("2002:a00:1::", False),  # 6to4 → 10.0.0.1
+        ("::7f00:1", False),  # IPv4-compatible → 127.0.0.1
+        ("::5db8:d822", False),  # IPv4-compatible, even of a public v4
+        ("fec0::1", False),  # deprecated site-local
     ],
 )
 def test_is_public_address(ip, public):
@@ -170,30 +173,91 @@ def test_redirect_hops_are_rechecked():
         run(go())
 
 
-def test_redirect_followed_and_credentials_stripped_cross_host():
+def _redirect_chain(seen, first_host, location):
+    def handler(request):
+        seen.append(request)
+        if request.headers["host"] == first_host:
+            return httpx.Response(301, headers={"location": location})
+        return httpx.Response(200, text="done")
+
+    return handler
+
+
+SECRET_HEADERS = {
+    "Authorization": "Bearer t",
+    "X-Api-Key": "k",
+    "Proxy-Authorization": "p",
+    "Cookie": "c=1",
+}
+
+
+def _get(handler, url, **kw):
+    async def go():
+        async with _client(handler) as c:
+            return await safe_request("GET", url, client=c, **kw)
+
+    return run(go())
+
+
+def test_cross_host_redirect_drops_all_caller_headers():
+    seen = []
+    handler = _redirect_chain(seen, "public.example", "http://other.example/z")
+    resp = _get(handler, "http://public.example/", headers=SECRET_HEADERS)
+    assert resp.text == "done" and resp.url == "http://other.example/z"
+    assert seen[0].headers["x-api-key"] == "k"
+    for name in SECRET_HEADERS:
+        assert name.lower() not in seen[1].headers
+    assert seen[1].url.host == "93.184.216.35"
+
+
+def test_port_change_is_an_origin_change():
+    seen = []
+    handler = _redirect_chain(seen, "public.example", "http://public.example:8080/")
+    _get(handler, "http://public.example/", headers=SECRET_HEADERS)
+    assert "authorization" not in seen[1].headers
+    assert "x-api-key" not in seen[1].headers
+
+
+def test_same_origin_redirect_keeps_headers():
     seen = []
 
     def handler(request):
         seen.append(request)
-        if request.headers["host"] == "public.example":
-            return httpx.Response(301, headers={"location": "http://other.example/z"})
-        return httpx.Response(200, text="done")
+        if request.url.path == "/a":
+            return httpx.Response(302, headers={"location": "/b"})
+        return httpx.Response(200)
 
-    async def go():
-        async with _client(handler) as c:
-            return await safe_request(
-                "GET",
-                "http://public.example/",
-                client=c,
-                headers={"Authorization": "Bearer t", "X-Keep": "1"},
-            )
+    _get(handler, "https://public.example/a", headers=SECRET_HEADERS)
+    assert seen[1].url.path == "/b"
+    assert seen[1].headers["authorization"] == "Bearer t"
 
-    resp = run(go())
-    assert resp.text == "done" and resp.url == "http://other.example/z"
-    assert seen[0].headers["authorization"] == "Bearer t"
-    assert "authorization" not in seen[1].headers
-    assert seen[1].headers["x-keep"] == "1"
-    assert seen[1].url.host == "93.184.216.35"
+
+def test_https_to_http_downgrade_is_refused():
+    seen = []
+    handler = _redirect_chain(seen, "public.example", "http://public.example/")
+    with pytest.raises(UnsafeURLError, match="https to http"):
+        _get(handler, "https://public.example/", headers=SECRET_HEADERS)
+    assert len(seen) == 1
+
+
+def test_pinned_requests_never_reuse_connections():
+    seen = []
+    handler = _redirect_chain(seen, "public.example", "https://other.example/")
+    _get(handler, "https://public.example/")
+    assert all(r.headers["connection"] == "close" for r in seen)
+    assert [r.extensions["sni_hostname"] for r in seen] == [
+        "public.example",
+        "other.example",
+    ]
+
+
+def test_overall_deadline_bounds_a_slow_server():
+    async def slow(request):
+        await asyncio.sleep(5)
+        return httpx.Response(200)
+
+    with pytest.raises(TimeoutError, match="0.2s deadline"):
+        _get(slow, "http://public.example/", timeout=0.2)
 
 
 def test_redirect_limit():

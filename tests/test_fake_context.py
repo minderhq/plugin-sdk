@@ -79,10 +79,11 @@ def test_plugins_invoke_values_callables_and_unknown_targets():
     assert run(ctx.plugins.invoke("telegraf", "slow", a=1)) == {"async": {"a": 1}}
     with pytest.raises(CapabilityInvalid):
         run(ctx.plugins.invoke("telegraf", "missing"))
+    # identifying args only: kwarg NAMES, not their values
     assert ctx.called("plugins.invoke")[1].args == {
         "plugin": "telegraf",
         "action": "add_target",
-        "host": "h",
+        "kwargs": ["host"],
     }
 
 
@@ -146,3 +147,23 @@ def test_run_lifecycle_ctx_ignored_for_plugins_without_hook():
 
     out = run(run_lifecycle(Plain(), ctx=FakePlatformContext()))
     assert out["metadata"].name == "p"
+
+
+def test_for_plugin_derives_grants_from_declarations():
+    class Decl(PluginBase):
+        CONTRACT_VERSION = 2
+        MANAGES = ["telegraf"]
+        REQUIRES = {"bundles": ["rag"]}
+
+    ctx = FakePlatformContext.for_plugin(Decl(), secrets={"K": "v"})
+    assert ctx.has("secrets.read")
+    assert ctx.has("telegraf.reload") and ctx.has("telegraf")
+    assert ctx.has("documents.index")
+    assert not ctx.has("plugins.invoke")
+    assert run(ctx.secrets.get("K")) == "v"
+    with pytest.raises(CapabilityDenied):
+        run(ctx.plugins.invoke("x", "y"))
+
+    bare = FakePlatformContext.for_plugin(PluginBase(), dependencies=["telegraf"])
+    assert bare.has("plugins.invoke")
+    assert not bare.has("telegraf") and not bare.has("documents.index")

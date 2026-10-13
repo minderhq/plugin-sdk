@@ -86,6 +86,8 @@ def test_contract_version_falls_back_to_1_for_garbage():
         ("localhost", True),
         ("API.example.com", False),
         ("*.*.example.com", False),
+        ("*.com", False),  # TLD-only wildcard
+        ("*.example.co", True),
         ("-bad.example.com", False),
         ("1.2.3.4", False),
         ("", False),

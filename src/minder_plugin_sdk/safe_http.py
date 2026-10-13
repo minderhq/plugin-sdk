@@ -13,8 +13,12 @@ cloud metadata endpoints:
 * the connection is **pinned** to the address that was checked (no second DNS
   lookup that could return something else), with TLS still verified against
   the hostname;
-* redirects are followed manually and **every hop is re-checked**;
-* the response body is capped (``max_bytes``).
+* redirects are followed manually and **every hop is re-checked**; a
+  redirect to another origin drops the caller's headers, and an
+  ``https`` → ``http`` downgrade is refused;
+* each hop uses a fresh connection, never one pooled for another host;
+* the response body is capped (``max_bytes``) and ``timeout`` bounds the whole
+  call.
 
 Optionally pass ``allowed_hosts`` (e.g. your plugin's ``EGRESS`` list) to also
 restrict which hosts may be contacted at all.
@@ -68,6 +72,12 @@ DEFAULT_MAX_REDIRECTS = 5
 DEFAULT_TIMEOUT = 30.0
 
 _NAT64 = ipaddress.ip_network("64:ff9b::/96")
+# Not covered by ``is_global`` on every Python version: IPv4-compatible IPv6
+# (deprecated; ``::7f00:1`` is 127.0.0.1) and deprecated site-local addresses.
+_NON_PUBLIC_V6 = (
+    ipaddress.ip_network("::/96"),
+    ipaddress.ip_network("fec0::/10"),
+)
 _REDIRECTS = frozenset({301, 302, 303, 307, 308})
 
 
@@ -87,7 +97,7 @@ def is_public_address(ip: Union[str, IPAddress]) -> bool:
     """Whether ``ip`` is a public, unicast, globally routable address."""
     addr = ipaddress.ip_address(ip) if isinstance(ip, str) else ip
     if isinstance(addr, ipaddress.IPv6Address):
-        if addr.scope_id:
+        if addr.scope_id or any(addr in net for net in _NON_PUBLIC_V6):
             return False
         inner = _embedded_ipv4(addr)
         if inner is not None:
@@ -205,6 +215,13 @@ async def _read_capped(response: "httpx.Response", max_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
+def _origin(url: str) -> Tuple[str, str, int]:
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    port = parts.port or (443 if scheme == "https" else 80)
+    return scheme, (parts.hostname or "").lower().rstrip("."), port
+
+
 async def safe_request(
     method: str,
     url: str,
@@ -221,33 +238,69 @@ async def safe_request(
 ) -> SafeResponse:
     """Make one HTTP request under the egress rules (see module docstring).
 
-    Redirects are followed (re-checked per hop) only for ``GET`` / ``HEAD``;
-    other methods return the redirect response as-is. ``client`` lets a caller
-    reuse a client or inject a test transport; the request is still sent with
-    redirects disabled and the address pinned."""
+    * ``timeout`` bounds the **whole** call (DNS, every redirect hop and the
+      body), not just each read; past it, ``TimeoutError`` is raised.
+    * Redirects are followed (re-checked per hop) only for ``GET`` / ``HEAD``;
+      other methods return the redirect response as-is.
+    * When a redirect changes the origin (scheme, host or port), **all**
+      caller-supplied ``headers`` are dropped (they may carry credentials under
+      any name). An ``https`` → ``http`` downgrade is refused outright.
+    * Every hop uses a fresh connection (``Connection: close``), so a pinned
+      TLS connection is never reused for another host.
+    * ``client`` exists **for tests** (inject a mock transport). A real client
+      would bring its own pool, proxy, timeout and transport settings, which
+      this function does not control; leave it ``None`` in plugin code."""
     try:
-        import httpx
+        import httpx  # noqa: F401
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise ImportError("safe_http requires httpx: pip install httpx") from exc
 
-    method = method.upper()
-    follow = method in ("GET", "HEAD")
-    patterns = _patterns(allowed_hosts)
-    send_headers = dict(headers or {})
-    origin = (urlsplit(url).hostname or "").lower()
-    owned = client is None
-    http = client or httpx.AsyncClient(timeout=timeout, trust_env=False)
     try:
-        current = url
-        for _hop in range(max_redirects + 1):
-            host, address = await check_url(current, patterns)
-            if host.lower() != origin:
-                # Never forward credentials to a different host on redirect.
-                send_headers = {
-                    k: v
-                    for k, v in send_headers.items()
-                    if k.lower() not in ("authorization", "cookie")
-                }
+        return await asyncio.wait_for(
+            _request(
+                method.upper(),
+                url,
+                dict(headers or {}),
+                params,
+                content,
+                json_body,
+                _patterns(allowed_hosts),
+                max_bytes,
+                max_redirects,
+                timeout,
+                client,
+            ),
+            timeout,
+        )
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"request exceeded the {timeout}s deadline") from None
+
+
+async def _request(
+    method: str,
+    url: str,
+    caller_headers: Dict[str, str],
+    params: Optional[Mapping[str, Any]],
+    content: Optional[bytes],
+    json_body: Any,
+    patterns: Optional[List[str]],
+    max_bytes: int,
+    max_redirects: int,
+    timeout: float,
+    client: Optional["httpx.AsyncClient"],
+) -> SafeResponse:
+    import httpx
+
+    follow = method in ("GET", "HEAD")
+    first_origin = _origin(url)
+    current = url
+    for _hop in range(max_redirects + 1):
+        host, address = await check_url(current, patterns)
+        same_origin = _origin(current) == first_origin
+        send_headers = dict(caller_headers) if same_origin else {}
+        send_headers["Connection"] = "close"
+        http = client or httpx.AsyncClient(timeout=timeout, trust_env=False)
+        try:
             request = http.build_request(
                 method,
                 current,
@@ -266,7 +319,13 @@ async def safe_request(
             try:
                 location = response.headers.get("location")
                 if follow and response.status_code in _REDIRECTS and location:
-                    current = urljoin(current, location)
+                    target = urljoin(current, location)
+                    if (
+                        urlsplit(current).scheme.lower() == "https"
+                        and urlsplit(target).scheme.lower() == "http"
+                    ):
+                        raise UnsafeURLError("redirect from https to http refused")
+                    current = target
                     params = None  # already part of the redirect target
                     continue
                 body = await _read_capped(response, max_bytes)
@@ -279,7 +338,7 @@ async def safe_request(
                 )
             finally:
                 await response.aclose()
-        raise UnsafeURLError(f"more than {max_redirects} redirects")
-    finally:
-        if owned:
-            await http.aclose()
+        finally:
+            if client is None:
+                await http.aclose()
+    raise UnsafeURLError(f"more than {max_redirects} redirects")

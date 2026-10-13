@@ -61,9 +61,12 @@ def contract_version(plugin: Any) -> int:
 
 
 def is_host_pattern(value: Any) -> bool:
-    """A bare hostname (``api.example.com``) or a one-level wildcard
-    (``*.example.com``): lowercase, no scheme, port, path or IP literal."""
+    """A bare hostname (``api.example.com``) or a wildcard over a domain of at
+    least two labels (``*.example.com``; not ``*.com``): lowercase, no scheme,
+    port, path or IP literal."""
     if not isinstance(value, str) or not _HOST_RE.match(value):
+        return False
+    if value.startswith("*.") and "." not in value[2:]:
         return False
     # Reject IPv4 literals: an allowlist names hosts, not addresses.
     return not re.match(r"^[0-9.]+$", value)

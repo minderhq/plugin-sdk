@@ -39,7 +39,10 @@ def test_secret_names(name):
     assert is_platform_secret_name(name)
 
 
-@pytest.mark.parametrize("name", ["WEATHER_API_BASE", "HTTP_TIMEOUT", "TOKENS_LIMIT"])
+@pytest.mark.parametrize(
+    "name",
+    ["WEATHER_API_BASE", "HTTP_TIMEOUT", "TOKENS_LIMIT", "NEO4J_HTTP", "RABBITMQ_URL"],
+)
 def test_non_secret_names(name):
     assert not is_platform_secret_name(name)
 
@@ -55,13 +58,20 @@ def test_non_secret_names(name):
         'os.getenv("POSTGRES_PASSWORD")',
         'environ["SERVICE_SYNC_TOKEN"]',
         'getenv("INFLUXDB_TOKEN")',
+        'o.environ["JWT_SECRET"]',
+        'o.getenv("NEO4J_AUTH")',
+        'env.get("RABBITMQ_PASSWORD")',
+        'ge("REDIS_PASSWORD")',
     ],
 )
 def test_env_secret_reads_are_flagged(line):
-    errors = source_errors(f"import os\nfrom os import environ, getenv\nx = {line}\n")
+    errors = source_errors(
+        "import os, os as o\nfrom os import environ, getenv, environ as env\n"
+        f"from os import getenv as ge\nx = {line}\n"
+    )
     assert len(errors) == 1
     assert "reads platform secret" in errors[0]
-    assert "<plugin>:3:" in errors[0]
+    assert "<plugin>:4:" in errors[0]
 
 
 @pytest.mark.parametrize(
@@ -78,6 +88,12 @@ def test_non_secret_reads_pass(line):
     assert source_errors(f"import os\nname = 'x'\nconfig = {{}}\nx = {line}\n") == []
 
 
+def test_unrelated_environ_names_are_not_os_environ():
+    # a local dict that happens to be called "environ" isn't the process env
+    src = 'environ = {}\nx = environ["JWT_SECRET"]\n'
+    assert source_errors(src) == []
+
+
 def test_config_schema_keys_are_allowed():
     src = 'import os\nx = os.environ.get("GITHUB_TOKEN")\n'
     assert source_errors(src) != []
@@ -91,6 +107,10 @@ def test_config_schema_keys_are_allowed():
         "import core.state",
         "from core import state",
         "from core.secrets import ScopedSecretReader",
+        "import importlib\nm = importlib.import_module('core.state')",
+        "import importlib as il\nm = il.import_module('core')",
+        "from importlib import import_module as im\nm = im('core.x')",
+        "m = __import__('core.state')",
     ],
 )
 def test_core_imports_are_flagged(line):
@@ -99,7 +119,14 @@ def test_core_imports_are_flagged(line):
 
 
 @pytest.mark.parametrize(
-    "line", ["from .core import helper", "import corelib", "from coredata import x"]
+    "line",
+    [
+        "from .core import helper",
+        "import corelib",
+        "from coredata import x",
+        "import importlib\nm = importlib.import_module('corelib')",
+        "import importlib\nm = importlib.import_module(name)",
+    ],
 )
 def test_non_platform_imports_pass(line):
     assert source_errors(line + "\n") == []
@@ -180,3 +207,28 @@ def test_subclass_in_another_module_is_scanned(tmp_path, monkeypatch):
 def test_examples_pass_the_source_rules(example):
     p = _load_plugin_class(ROOT / "examples" / example)()
     assert plugin_source_errors(p) == []
+
+
+def test_package_helper_modules_are_scanned(tmp_path):
+    pkg = tmp_path / "pkgplug"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text(
+        "from minder_plugin_sdk import PluginBase, PluginMetadata\n"
+        "from .helpers import neo\n\n"
+        '__all__ = ["P"]\n\n\n'
+        "class P(PluginBase):\n"
+        "    async def register(self):\n"
+        "        return PluginMetadata(\n"
+        '            name="p", version="1.0.0", description="d", author="a"\n'
+        "        )\n"
+    )
+    (pkg / "helpers.py").write_text(
+        "import os\n\n\ndef neo():\n    return os.environ['NEO4J_AUTH']\n"
+    )
+    (pkg / "sub").mkdir()
+    (pkg / "sub" / "deep.py").write_text("from core import state\n")
+    p = _load_plugin_class(pkg / "__init__.py")()
+    errors = plugin_source_errors(p)
+    assert any("helpers.py" in e and "NEO4J_AUTH" in e for e in errors), errors
+    assert any("deep.py" in e and "'core'" in e for e in errors), errors
+    assert len(errors) == 2

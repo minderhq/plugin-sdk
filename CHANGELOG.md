@@ -24,19 +24,28 @@ of process, where plugin code holds no platform credentials.
   `MANAGES`, `EGRESS` (`"public"` / `"lan"` / host patterns) and `TIMESERIES`
   (declared only), with `declaration_errors` / `contract_version`.
 - `safe_http`: `safe_request` / `check_url`, SSRF-guarded outbound HTTP. It
-  refuses non-public addresses, pins the checked IP, re-checks each redirect
-  hop and caps the body. It needs `httpx` (optional).
+  refuses non-public addresses, pins the checked IP on a fresh connection per
+  hop, re-checks each redirect hop, drops caller headers on a cross-origin
+  redirect, refuses `https` → `http` downgrades, caps the body and bounds the
+  whole call by `timeout`. It needs `httpx` (optional).
 - `check_plugin` now also checks:
   - the contract-v2 declarations, refusing a `CONTRACT_VERSION` newer than
     supported;
-  - `os.environ` / `os.getenv` reads of platform-secret names, except keys the
-    plugin declares in its own `CONFIG_SCHEMA` (`source_rules`);
-  - imports of platform internals (`core.*`).
+  - `os.environ` / `os.getenv` reads of platform-secret names (aliases
+    included), except keys the plugin declares in its own `CONFIG_SCHEMA`
+    (`source_rules`);
+  - imports of platform internals (`core.*`), including literal
+    `importlib.import_module` / `__import__` calls.
+
+  The scan covers every module of a packaged plugin. It is a lint, not a
+  security boundary.
 
   Existing plugins that read such names directly from the environment now
   fail validation. Move them to `CONFIG_SCHEMA` or `ctx.secrets`.
 - `harness.FakePlatformContext` gives plugin unit tests configurable secrets,
   grants, denials and unavailability, plugin-invoke results, and recorded calls.
+  `FakePlatformContext.for_plugin(...)` derives grants from the plugin's
+  declarations.
   `run_lifecycle(plugin, ctx=...)` binds a context.
 - `minder-plugin inspect` reports `contract_version`, `manages`, `egress` and
   `timeseries`.
