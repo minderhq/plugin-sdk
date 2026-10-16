@@ -98,6 +98,9 @@ __all__ = [
     "Signer",
     "NonceCache",
     "InMemoryNonceCache",
+    "NonceCacheFull",
+    "NonceAlreadyExpired",
+    "split_target",
     "InstallationKey",
     "MinderKeySet",
     "StaticKeySet",
@@ -155,10 +158,11 @@ _PARAM_ORDER = ("created", "nonce", "keyid", "alg")
 _KEYID = re.compile(r"^[A-Za-z0-9._:\-]{1,128}\Z")
 _NONCE = re.compile(r"^[A-Za-z0-9_\-]{16,128}\Z")
 _METHOD = re.compile(r"^[A-Za-z]{1,16}\Z")
-# Whitespace and control characters would let a component value span lines of
-# the signature base, or differ from what goes on the wire.
-_UNSAFE_PATH = re.compile(r"[\x00-\x20\x7f-\x9f]")
-_UNSAFE_QUERY = re.compile(r"[\x00-\x20\x7f-\x9f#]")
+# A request target is printable ASCII only (0x21-0x7E), as on the platform:
+# whitespace, controls and non-ASCII would let a component value span lines of
+# the signature base, or differ between what was signed and what goes on the
+# wire (a client percent-encodes anything else).
+_UNSAFE_TARGET = re.compile(r"[^\x21-\x7e]")
 _UNSAFE_FIELD = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
 _JWK_X = re.compile(r"[A-Za-z0-9_\-]{43}")
 _ED25519_SIGNATURE_LEN = 64
@@ -211,19 +215,31 @@ class Signer(Protocol):
 # ── nonce replay ─────────────────────────────────────────────────────────────
 
 
+class NonceCacheFull(Exception):
+    """The nonce cache has no room for a new live nonce (fail closed)."""
+
+
+class NonceAlreadyExpired(Exception):
+    """The nonce's expiry is already past, so it can't be remembered."""
+
+
 class NonceCache(Protocol):
     """Remembers nonces for replay refusal.
 
     ``check_and_store`` returns True when ``nonce`` is new for ``scope`` (and
-    records it until ``expires_at``), False when it was already seen or can't
-    be recorded. ``expires_at`` is an absolute WALL-clock instant (unix
-    seconds, ``created + max_age + clock_skew``), not a duration. A signature
-    stops being fresh at ``created + max_age`` on the same clock, so a clock
-    step can never open a window where a nonce is forgotten but its signature
-    is still accepted. It must be
-    atomic: two concurrent calls with the same nonce must not both return
-    True. A server with several processes or replicas needs a shared store
-    (e.g. Redis ``SET key 1 NX EXAT <expires_at>``); see
+    records it until ``expires_at``, inclusive), and False only when it is
+    still remembered (a replay). It raises :class:`NonceAlreadyExpired` when
+    ``expires_at`` is already past (it can't be remembered) and
+    :class:`NonceCacheFull` when it has no room; :func:`verify_request` maps
+    those to ``signature_expired`` and ``nonce_cache_full``. ``expires_at``
+    is an absolute WALL-clock instant (unix seconds,
+    ``created + max_age + clock_skew``), not a duration. A signature stops
+    being fresh at ``created + max_age`` on the same clock, so a clock step
+    can never open a window where a nonce is forgotten but its signature is
+    still accepted. It must be atomic: two concurrent calls with the same
+    nonce must not both return True. A server with several processes or
+    replicas needs a shared store (e.g. Redis ``SET key 1 NX EXAT
+    <expires_at>``); see
     :class:`InMemoryNonceCache` for the single-process default.
     """
 
@@ -235,8 +251,9 @@ class NonceCache(Protocol):
 class InMemoryNonceCache:
     """A per-process :class:`NonceCache` with wall-clock expiry and a size bound.
 
-    When it is full of live nonces it refuses new ones (fail closed) rather
-    than evicting one that could then be replayed. Only requests with a valid
+    When it is full of live nonces it refuses new ones (fail closed,
+    :class:`NonceCacheFull`) rather than evicting one that could then be
+    replayed. Only requests with a valid
     signature reach it, so filling it needs a valid key.
     """
 
@@ -273,10 +290,10 @@ class InMemoryNonceCache:
             expiry = self._seen.get(key)
             if expiry is not None and expiry >= now:
                 return False
-            if len(self._seen) >= self._max:
-                return False
             if float(expires_at) < now:
-                return False  # already stale: never accepted
+                raise NonceAlreadyExpired()
+            if len(self._seen) >= self._max:
+                raise NonceCacheFull()
             self._seen[key] = float(expires_at)
             self._seen.move_to_end(key)
             return True
@@ -498,21 +515,33 @@ def _signature_params_value(
 
 def normalize_authority(authority: str, scheme: str = "https") -> str:
     """The ``@authority`` form of ``host[:port]`` (RFC 9421 section 2.2.3):
-    lowercase, the scheme's default port (443 for https, 80 for http) dropped.
+    lowercase, one trailing dot of a fully qualified host name dropped
+    (``example.com.`` is ``example.com``), the scheme's default port (443 for
+    https, 80 for http) dropped.
 
     Strict, like the platform's verifier: the host is an ASCII reg-name or a
     bracketed IPv6 literal without a zone id, and the port is 1-65535.
     Raises ValueError for anything else (userinfo, a path, whitespace, a
-    non-ASCII host, ``host:`` with an empty port, port 0...). For a URL use
+    non-ASCII host, ``host:`` with an empty port, port 0, an empty label
+    such as ``example.com..`` or ``.``...). For a URL use
     :func:`authority_from_origin`."""
     scheme = scheme.lower()
     if scheme not in _DEFAULT_PORTS:
         raise ValueError("scheme must be http or https")
-    text = authority.strip().lower() if isinstance(authority, str) else ""
+    if not isinstance(authority, str) or not authority.isascii():
+        # Before lower(): some non-ASCII characters lowercase to ASCII (the
+        # Kelvin sign U+212A becomes "k"), which would let a look-alike
+        # authority normalise to a real one.
+        raise ValueError("authority must be ASCII")
+    text = authority.strip().lower()
     m = _AUTHORITY.match(text)
     if not m:
         raise ValueError("authority must be host[:port]")
     host, port = m.group(1), m.group(2)
+    if not host.startswith("[") and host.endswith("."):
+        host = host[:-1]
+        if not host or host.endswith("."):
+            raise ValueError("authority host has an empty label")
     if port is not None and not 0 < int(port) < 65536:
         raise ValueError("authority port out of range")
     if port is None or int(port) == _DEFAULT_PORTS[scheme]:
@@ -535,10 +564,28 @@ def query_component(query: str) -> str:
     """The ``@query`` value for a raw (still percent-encoded) query string:
     ``?`` followed by it, so ``?`` when it is empty (RFC 9421 section 2.2.7).
     A leading ``?`` in ``query`` is accepted."""
+    if not isinstance(query, str) or _UNSAFE_TARGET.search(query):
+        raise ValueError("query must be printable ASCII (0x21-0x7E)")
     raw = query[1:] if query.startswith("?") else query
-    if _UNSAFE_QUERY.search(raw):
-        raise ValueError("query must not contain whitespace, controls or #")
+    if "#" in raw:
+        raise ValueError("query must not carry a fragment")
     return "?" + raw
+
+
+def split_target(target: str) -> Tuple[str, str]:
+    """A raw request target (``/path?query``) -> (``@path``, ``@query``),
+    where ``@query`` is ``?`` plus the query, ``?`` alone when there is none.
+    Raises ValueError for a target that isn't printable ASCII (0x21-0x7E),
+    isn't an absolute path, or carries a fragment. The character check runs
+    before the split. In an ASGI app, build the target from the scope's
+    ``raw_path`` and ``query_string``, never from the percent-decoded
+    ``request.url.path``."""
+    if not isinstance(target, str) or _UNSAFE_TARGET.search(target):
+        raise ValueError("target must be printable ASCII (0x21-0x7E)")
+    if not target.startswith("/") or "#" in target:
+        raise ValueError("target must be an absolute path (and query), no fragment")
+    path, _sep, query = target.partition("?")
+    return path, "?" + query
 
 
 def signature_base(
@@ -606,10 +653,10 @@ def new_nonce() -> str:
 
 
 def _check_path(path: str) -> None:
+    if not isinstance(path, str) or _UNSAFE_TARGET.search(path):
+        raise ValueError("path must be printable ASCII (0x21-0x7E)")
     if not path.startswith("/") or "?" in path or "#" in path:
         raise ValueError("path must be an absolute path without query or fragment")
-    if _UNSAFE_PATH.search(path):
-        raise ValueError("path must not contain whitespace or controls")
 
 
 # ── signing ──────────────────────────────────────────────────────────────────
@@ -850,7 +897,13 @@ async def verify_request(
     # Anchored to the wall clock ``created`` is judged by, so a clock step
     # can't forget a nonce whose signature is still fresh.
     expires_at = created + max_age + clock_skew
-    if not await nonce_cache.check_and_store(keyid, nonce, expires_at):
+    try:
+        stored = await nonce_cache.check_and_store(keyid, nonce, expires_at)
+    except NonceAlreadyExpired as e:
+        raise SignatureError("signature_expired", "nonce expiry is past") from e
+    except NonceCacheFull as e:
+        raise SignatureError("nonce_cache_full") from e
+    if not stored:
         raise SignatureError("nonce_replayed")
     return VerifiedRequest(
         keyid=keyid, created=created, nonce=nonce, components=tuple(components)

@@ -33,7 +33,11 @@ The component values are as follows:
   which the sender controls. This stops a request Minder signed for a
   different plugin from being replayed against yours. The host is ASCII (a
   reg-name, or a bracketed IPv6 literal without a zone id), and the port is
-  1-65535. Refuse anything else.
+  1-65535. Refuse anything else. Refuse non-ASCII input BEFORE lowercasing,
+  because some characters lowercase to ASCII (the Kelvin sign U+212A
+  becomes `k`). Drop exactly one trailing dot of a fully qualified name
+  (`example.com.` becomes `example.com`), and refuse an empty label
+  (`example.com..`, `.`).
 - `@path` is the path Minder addressed, e.g. `/minder/v1/invoke`. If a reverse
   proxy strips a prefix, use the external path. The simplest strict choice is
   the route constant you serve, not the raw path you received, so an alias
@@ -42,6 +46,9 @@ The component values are as follows:
 - `@query` is `?` followed by the raw query string, exactly as it appears in
   the request target. When there is no query it is just `?` (RFC 9421
   section 2.2.7).
+- The request target (path and query) must be printable ASCII
+  (0x21-0x7E). Check that before splitting it. A client percent-encodes
+  anything else.
 - `content-digest` and `authorization` are the header values, with
   leading and trailing whitespace removed.
 
@@ -162,7 +169,10 @@ Refuse the request (`401`) at the first failure:
    request's path and raw query, then verify it with Ed25519.
 8. **Replay.** Only now record `(keyid, nonce)`, set to expire at the
    wall-clock time `created + 300 + 10`. If the pair was already there,
-   refuse it.
+   refuse it as `nonce_replayed`. Two other outcomes are not replays: if the
+   store is full, refuse with `nonce_cache_full` (fail closed, and never
+   evict a live nonce). If the expiry is already past, refuse with
+   `signature_expired`.
    Recording only after the signature verifies means a forger can't use up
    real nonces. An absolute expiry, rather than a TTL on a monotonic clock,
    means a clock step can't make the store forget a nonce while its signature

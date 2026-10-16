@@ -533,7 +533,10 @@ def test_cli_serve_refusals(monkeypatch, capsys):
         args = secure[:i] + secure[i + 2 :]
         capsys.readouterr()
         assert cli.main(["serve", str(EXAMPLE), "--minder-url", MINDER, *args]) == 2
-        assert "required" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "required" in out and drop in out
+        assert "--insecure-host-authority" in out
+        assert "insecure_host_authority" not in out
 
 
 def test_cli_serve_insecure_opt_in(monkeypatch):

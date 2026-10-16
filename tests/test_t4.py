@@ -177,6 +177,10 @@ def test_signature_base_layout():
         ("plugin.example.com:8443", "https", "plugin.example.com:8443"),
         ("[2001:DB8::1]:443", "https", "[2001:db8::1]"),
         ("10.0.0.5:08443", "https", "10.0.0.5:8443"),
+        # One trailing dot of a fully qualified name is dropped.
+        ("Example.com.", "https", "example.com"),
+        ("example.com.:443", "https", "example.com"),
+        ("example.com.:8443", "https", "example.com:8443"),
     ],
 )
 def test_authority_normalisation(value, scheme, expected):
@@ -194,6 +198,8 @@ def test_authority_normalisation(value, scheme, expected):
         "host:",
         "ho st",
         "host:1:2",
+        "example.com..",
+        ".",
         # port 0, a non-ASCII host, IPv6 zone ids, a URL
         "host:0",
         "plügin.example",
@@ -231,6 +237,21 @@ def test_authority_from_origin_refuses_non_origins(origin):
         t4.authority_from_origin(origin)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "plugin-K.example.com",  # Kelvin sign: lowercases to ASCII "k"
+        "İnstance.example.com",  # dotted capital I: lowercases with a combining dot
+    ],
+)
+def test_non_ascii_is_refused_before_lowercasing(value):
+    assert value.lower().isascii() or "̇" in value.lower()
+    with pytest.raises(ValueError):
+        t4.normalize_authority(value)
+    with pytest.raises(ValueError):
+        t4.authority_from_origin(f"https://{value}")
+
+
 def test_scheme_must_be_http_or_https():
     with pytest.raises(ValueError):
         t4.normalize_authority("plugin.example", "ftp")
@@ -242,6 +263,41 @@ def test_query_component():
     assert t4.query_component("a=1&b=%20") == "?a=1&b=%20"
     with pytest.raises(ValueError):
         t4.query_component("a=1 2")
+    for bad in ("q=\u00e9", "a\tb", "a\x7f", "a#frag"):
+        with pytest.raises(ValueError):
+            t4.query_component(bad)
+
+
+# The target cases mirror the platform's own tests.
+@pytest.mark.parametrize(
+    "target",
+    [
+        "relative",
+        "/minder/v1/invoke#frag",
+        "/a b",
+        "",
+        "/caf\u00e9",  # non-ASCII: a client percent-encodes it
+        "/a?q=\u00e9",
+        "/a\tb",
+        "/a\x7f",
+        "/a\x00",
+        "/a?b c",
+    ],
+)
+def test_split_target_refusals(target):
+    with pytest.raises(ValueError):
+        t4.split_target(target)
+
+
+def test_percent_encoded_target_is_printable_ascii():
+    assert t4.split_target("/caf%C3%A9?q=%20&r=~") == ("/caf%C3%A9", "?q=%20&r=~")
+    assert t4.split_target("/minder/v1/invoke") == ("/minder/v1/invoke", "?")
+
+
+def test_non_ascii_path_or_query_is_refused_by_verify():
+    headers = signed()
+    assert reason(verify, headers, path="/caf\u00e9") == "invalid_component"
+    assert reason(verify, headers, query="q=\u00e9") == "invalid_component"
 
 
 def test_round_trip_and_query_coverage():
@@ -444,6 +500,22 @@ def test_nonce_expiry_is_created_plus_max_age_plus_skew_on_the_wall_clock():
     assert reason(verify, signed(), cache=cache, now=wall[0]) == "signature_expired"
 
 
+def test_full_cache_is_its_own_reason():
+    cache = InMemoryNonceCache(max_entries=1, clock=lambda: NOW)
+    verify(signed(), cache=cache)
+    assert reason(verify, signed(nonce="sdk-test-nonce-00002"), cache=cache) == (
+        "nonce_cache_full"
+    )
+
+
+def test_past_nonce_expiry_is_signature_expired_not_replayed():
+    # The cache's clock is ahead of the verifier's: the nonce could not be
+    # remembered, which is an expiry, not a replay.
+    cache = InMemoryNonceCache(clock=lambda: NOW + 1000)
+    assert reason(verify, signed(), cache=cache) == "signature_expired"
+    assert len(cache) == 0
+
+
 def test_forged_request_does_not_burn_the_nonce():
     cache = InMemoryNonceCache(clock=lambda: NOW)
     assert reason(verify, signed(), path="/elsewhere", cache=cache) == "bad_signature"
@@ -573,7 +645,8 @@ def test_nonce_cache_absolute_expiry_and_scope():
     now[0] = 110  # live up to and including expires_at
     assert not run(cache.check_and_store("k", "n", 110))
     now[0] = 111
-    assert not run(cache.check_and_store("k", "late", 110))  # already expired
+    with pytest.raises(t4.NonceAlreadyExpired):
+        run(cache.check_and_store("k", "late", 110))
     assert run(cache.check_and_store("k", "n", 500))
 
 
@@ -582,7 +655,10 @@ def test_nonce_cache_fails_closed_when_full():
     cache = InMemoryNonceCache(max_entries=2, clock=lambda: now[0])
     assert run(cache.check_and_store("k", "a", 10))
     assert run(cache.check_and_store("k", "b", 20))
-    assert not run(cache.check_and_store("k", "c", 30))
+    with pytest.raises(t4.NonceCacheFull):
+        run(cache.check_and_store("k", "c", 30))
+    # A replay is still a plain False, even when full.
+    assert not run(cache.check_and_store("k", "a", 10))
     now[0] = 11
     assert run(cache.check_and_store("k", "c", 30))
     with pytest.raises(ValueError):

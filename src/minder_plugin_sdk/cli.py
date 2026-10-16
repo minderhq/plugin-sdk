@@ -176,6 +176,21 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             f"WARN {args.installation_key_env} is not set: self.ctx callbacks "
             "will be unavailable"
         )
+    missing = [
+        flag
+        for flag, value in (
+            ("--public-authority", args.public_authority),
+            ("--installation-id", args.installation_id),
+        )
+        if not value
+    ]
+    if missing and not args.insecure_host_authority:
+        print(
+            f"FAIL {' and '.join(missing)} required: without them a request "
+            "signed for another plugin or installation could be replayed here "
+            "(--insecure-host-authority allows it for local development only)"
+        )
+        return 2
     plugin = _load_plugin_class(Path(args.path))()
     try:
         app = create_app(
