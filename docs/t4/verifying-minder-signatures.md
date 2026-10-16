@@ -21,7 +21,7 @@ bytes to rebuild and the checks to run, in order. Each step is shown with
 | `keyid` | the key's RFC 7638 JWK thumbprint (the JWK's `kid`) |
 | Body digest | `Content-Digest: sha-256=:<base64 of SHA-256(body)>:` (RFC 9530), also for an empty body |
 | Freshness | accept only if `now - created <= 300` and `created - now <= 10` (seconds) |
-| Replay | each `nonce` once per `keyid`, remembered until the wall-clock time `created + 300` |
+| Replay | each `nonce` once per `keyid`, remembered until the wall-clock time `created + 300 + 10` |
 | Minder's keys | `GET https://<minder>/.well-known/minder/plugin-jwks.json` |
 
 The component values are as follows:
@@ -156,12 +156,13 @@ Refuse the request (`401`) at the first failure:
 7. **Signature.** Rebuild the base as above, using **your** authority and the
    request's path and raw query, then verify it with Ed25519.
 8. **Replay.** Only now record `(keyid, nonce)`, set to expire at the
-   wall-clock time `created + 300`. If the pair was already there, refuse it.
+   wall-clock time `created + 300 + 10`. If the pair was already there,
+   refuse it.
    Recording only after the signature verifies means a forger can't use up
    real nonces. An absolute expiry, rather than a TTL on a monotonic clock,
    means a clock step can't make the store forget a nonce while its signature
    is still fresh. With several replicas, use a shared store such as Redis
-   `SET <keyid>:<nonce> 1 NX EXAT <created+300>`.
+   `SET <keyid>:<nonce> 1 NX EXAT <created+310>`.
 
 ## Minder's key set
 

@@ -23,7 +23,7 @@ Signatures**:
   also for an empty body;
 - a signature is accepted while ``now - created <= 300`` and
   ``created - now <= 10`` (clock skew, never extending the 300 s), and each
-  nonce once per key until the wall-clock instant ``created + 300``.
+  nonce once per key until the wall-clock instant ``created + 300 + 10``.
 
 Minder publishes the keys it signs with at
 ``<minder>/.well-known/minder/plugin-jwks.json``; :class:`MinderKeySet` fetches
@@ -210,9 +210,10 @@ class NonceCache(Protocol):
     ``check_and_store`` returns True when ``nonce`` is new for ``scope`` (and
     records it until ``expires_at``), False when it was already seen or can't
     be recorded. ``expires_at`` is an absolute WALL-clock instant (unix
-    seconds, ``created + max_age``), not a duration: a signature stops being
-    fresh at that same instant, so a clock step can never open a window where
-    a nonce is forgotten but its signature is still accepted. It must be
+    seconds, ``created + max_age + clock_skew``), not a duration. A signature
+    stops being fresh at ``created + max_age`` on the same clock, so a clock
+    step can never open a window where a nonce is forgotten but its signature
+    is still accepted. It must be
     atomic: two concurrent calls with the same nonce must not both return
     True. A server with several processes or replicas needs a shared store
     (e.g. Redis ``SET key 1 NX EXAT <expires_at>``); see
@@ -755,7 +756,7 @@ async def verify_request(
 
     Freshness: ``now - created <= max_age`` and ``created - now <=
     clock_skew``; the skew never extends ``max_age``. The nonce is remembered
-    until the wall-clock instant ``created + max_age``.
+    until the wall-clock instant ``created + max_age + clock_skew``.
 
     Checks run in this order: the headers parse; the required components are
     covered; ``alg``; freshness; the key is known; the content digest; the
@@ -831,7 +832,10 @@ async def verify_request(
     except InvalidSignature as e:
         raise SignatureError("bad_signature") from e
 
-    if not await nonce_cache.check_and_store(keyid, nonce, created + max_age):
+    # Anchored to the wall clock ``created`` is judged by, so a clock step
+    # can't forget a nonce whose signature is still fresh.
+    expires_at = created + max_age + clock_skew
+    if not await nonce_cache.check_and_store(keyid, nonce, expires_at):
         raise SignatureError("nonce_replayed")
     return VerifiedRequest(
         keyid=keyid, created=created, nonce=nonce, components=tuple(components)

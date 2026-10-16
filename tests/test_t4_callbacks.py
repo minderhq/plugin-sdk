@@ -68,24 +68,16 @@ def test_it_is_a_platform_context():
 
 def test_callback_signature_matches_the_shared_vector():
     case = next(c for c in VECTORS["cases"] if c["name"] == "callback-with-grant")
-    if "@authority" not in " ".join(VECTORS["profile"]["components"]):
-        pytest.fail(
-            "fixtures/rfc9421_t4_vectors.json predates the @authority/@query "
-            "profile: copy the platform's current vectors"
-        )
     request, params, expected = case["request"], case["params"], case["expected"]
-    url = request.get("url") or request.get("target_uri")
-    authority = request.get("authority") or request["headers"].get("Host")
-    base = url.rsplit("/v1/plugin-callbacks/", 1)[0] if url else f"https://{authority}"
     ctx = CallbackPlatformContext(
-        callback_base=base,
+        callback_base=request["origin"],
         grant=params["authorization"].removeprefix("Bearer "),
         key=KEY,
         sign_options={"created": params["created"], "nonce": params["nonce"]},
     )
-    capability = request["path"].rsplit("/", 1)[1]
+    capability = request["target"].rsplit("/", 1)[1]
     sent_url, headers = ctx.signed_request(capability, request["body"].encode())
-    assert sent_url.endswith(request["path"])
+    assert sent_url == request["origin"] + request["target"]
     assert headers["Authorization"] == params["authorization"]
     assert headers["Content-Digest"] == expected["content_digest"]
     assert headers["Signature-Input"] == expected["signature_input"]

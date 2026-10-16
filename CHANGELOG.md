@@ -65,7 +65,7 @@ used.
   - A signature is fresh while `now - created <= 300` and
     `created - now <= 10`.
   - Nonce replay goes through a pluggable `NonceCache`, which expires entries
-    at the wall-clock time `created + 300`.
+    at the wall-clock time `created + 300 + 10`.
   - `MinderKeySet` fetches and caches Minder's
     `/.well-known/minder/plugin-jwks.json`, refetching on an unknown `keyid`
     with a rate limit.

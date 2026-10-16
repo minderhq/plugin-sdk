@@ -13,7 +13,6 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -233,30 +232,48 @@ def test_keyid_is_the_rfc7638_thumbprint():
 
 
 def vector_parts(case):
-    """method, authority, path, query, body of a vector request."""
+    """method, authority, path, query, body of a vector request. A request
+    names its ``origin``, normalised ``authority`` and raw ``target``."""
     request = case["request"]
-    components = " ".join(VECTORS["profile"]["components"])
-    if "@authority" not in components:
-        pytest.fail(
-            "fixtures/rfc9421_t4_vectors.json predates the @authority/@query "
-            "profile: copy the platform's current vectors"
-        )
-    authority = request.get("authority") or case.get("params", {}).get("authority")
-    query = request.get("query")
-    url = request.get("url") or request.get("target_uri")
-    if url:
-        parts = urlsplit(url)
-        authority = authority or t4.normalize_authority(url)
-        query = parts.query if query is None else query
-    if not authority:
-        authority = request["headers"].get("Host")
+    assert t4.normalize_authority(request["origin"]) == request["authority"]
+    path, _, query = request["target"].partition("?")
     return (
         request["method"],
-        authority,
-        request["path"],
-        query or "",
+        request["authority"],
+        path,
+        query,
         request["body"].encode(),
     )
+
+
+def test_fixture_profile_matches_the_sdk():
+    profile = VECTORS["profile"]
+    assert profile["label"] == t4.LABEL and profile["alg"] == t4.ALG
+    assert profile["components"][:5] == list(t4.REQUIRED_COMPONENTS)
+    assert profile["params"] == ["created", "nonce", "keyid", "alg"]
+    assert profile["max_age_seconds"] == t4.DEFAULT_MAX_AGE_SECONDS
+    assert profile["future_skew_seconds"] == t4.DEFAULT_CLOCK_SKEW_SECONDS
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_signature_base_matches_the_vectors(name):
+    case = CASES[name]
+    method, authority, path, query, body = vector_parts(case)
+    headers = {k.lower(): v for k, v in case["request"]["headers"].items()}
+    sig_params = case["expected"]["signature_input"].split("=", 1)[1]
+    components = [
+        c for c in t4.SUPPORTED_COMPONENTS if f'"{c}"' in sig_params.split(";")[0]
+    ]
+    base = t4.signature_base(
+        method=method,
+        authority=authority,
+        path=path,
+        query=query,
+        headers=headers,
+        components=components,
+        signature_params=sig_params,
+    )
+    assert base == case["expected"]["signature_base"].encode()
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
@@ -359,10 +376,18 @@ def test_replayed_nonce_is_refused():
     assert reason(verify, signed(), cache=cache) == "nonce_replayed"
 
 
-def test_nonce_is_remembered_until_created_plus_max_age_on_the_wall_clock():
+def test_nonce_expiry_is_created_plus_max_age_plus_skew_on_the_wall_clock():
+    seen = []
+
+    class Spy(InMemoryNonceCache):
+        async def check_and_store(self, scope, nonce, expires_at):
+            seen.append(expires_at)
+            return await super().check_and_store(scope, nonce, expires_at)
+
     wall = [NOW + 300.0]
-    cache = InMemoryNonceCache(clock=lambda: wall[0])
+    cache = Spy(clock=lambda: wall[0])
     verify(signed(), cache=cache, now=wall[0])
+    assert seen == [NOW + 300 + 10]
     # Still refused at the last instant the signature is fresh ...
     assert reason(verify, signed(), cache=cache, now=wall[0]) == "nonce_replayed"
     # ... and afterwards it is stale anyway.
