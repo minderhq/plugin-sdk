@@ -6,9 +6,16 @@ only the measurement name, tag key, and field name differ. These two helpers
 factor that out — a plugin keeps a thin wrapper that fills in its own
 measurement/tag/field and delegates here.
 
-Both helpers **never raise**: a failed InfluxDB call degrades to "no resume
-point" / "nothing written", never a crash that would abort the plugin's whole
-collection loop.
+Both helpers take an optional ``ctx`` (pass ``self.ctx``). When that platform
+context grants the time-series capability (the plugin declares ``TIMESERIES``),
+the helpers go through ``ctx.timeseries`` and never contact InfluxDB: a plugin
+hosted out of process has no store credentials and cannot reach it. Otherwise
+(no ``ctx``, the unbound context, or no grant) they talk to InfluxDB directly
+with ``cfg``, exactly as before.
+
+Both helpers **never raise**: a failed InfluxDB or platform call degrades to "no
+resume point" / "nothing written", never a crash that would abort the plugin's
+whole collection loop.
 """
 
 from __future__ import annotations
@@ -18,6 +25,13 @@ import math
 from datetime import date, datetime
 from re import Pattern
 from typing import Any, Dict, List, Mapping, Optional, Tuple
+
+from .context import (
+    CAP_TIMESERIES_LATEST,
+    CAP_TIMESERIES_WRITE,
+    PlatformContext,
+    TimeseriesAPI,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +94,30 @@ def line_protocol(
     return line
 
 
+def _timeseries(
+    ctx: Optional[PlatformContext], capability: str
+) -> Optional[TimeseriesAPI]:
+    """``ctx.timeseries`` when ``ctx`` is bound and grants ``capability``, else
+    ``None`` (the caller falls back to direct InfluxDB). The unbound context's
+    ``has()`` is always ``False``, so it falls back too."""
+    if ctx is None:
+        return None
+    try:
+        granted = ctx.has(capability)
+    except Exception:
+        return None
+    return getattr(ctx, "timeseries", None) if granted else None
+
+
+def _parse_day(t: Any) -> Optional[date]:
+    if not t:
+        return None
+    try:
+        return datetime.fromisoformat(str(t).replace("Z", "")).date()
+    except ValueError:
+        return None
+
+
 async def latest_influx_date(
     *,
     http_timeout: float,
@@ -88,16 +126,35 @@ async def latest_influx_date(
     measurement: str,
     tag_key: str,
     tag_value: str,
+    ctx: Optional[PlatformContext] = None,
 ) -> Optional[date]:
-    """Latest day already stored for ``tag_value`` (InfluxDB v3 SQL query), or
-    ``None`` if empty/unavailable. Never raises — a resume-query failure
-    degrades to "no resume point" (the caller backfills from scratch)."""
-    import httpx  # lazy: keep `import minder_plugin_sdk` working without httpx
-
-    if not cfg:
+    """Latest day already stored for ``tag_value``, or ``None`` if
+    empty/unavailable. Through ``ctx.timeseries.latest`` when ``ctx`` grants
+    ``timeseries.latest`` (``cfg`` is then unused), else an InfluxDB v3 SQL
+    query. Never raises — a resume-query failure degrades to "no resume point"
+    (the caller backfills from scratch)."""
+    api = _timeseries(ctx, CAP_TIMESERIES_LATEST)
+    if api is None and not cfg:
         return None
     if not safe_pattern.fullmatch(tag_value):
         logger.warning(f"Skipping influx resume for unsafe {tag_key}: {tag_value!r}")
+        return None
+    if api is not None:
+        try:
+            latest = await api.latest(measurement, tag_key, tag_value)
+        except Exception as e:
+            logger.warning(
+                f"Time-series resume query failed for {tag_value}: "
+                f"{type(e).__name__}"
+            )
+            return None
+        if isinstance(latest, dict):
+            latest = latest.get("time")
+        return _parse_day(latest)
+
+    import httpx  # lazy: keep `import minder_plugin_sdk` working without httpx
+
+    if not cfg:  # narrows the type; already checked above
         return None
     host, port = cfg.get("host", "minder-influxdb"), cfg.get("port", 8086)
     db = cfg.get("bucket", "minder-metrics")
@@ -124,12 +181,7 @@ async def latest_influx_date(
         if isinstance(rows, list) and rows and isinstance(rows[0], dict)
         else None
     )
-    if not t:
-        return None
-    try:
-        return datetime.fromisoformat(str(t).replace("Z", "")).date()
-    except ValueError:
-        return None
+    return _parse_day(t)
 
 
 async def write_history(
@@ -142,19 +194,20 @@ async def write_history(
     tag_value: str,
     field_name: str,
     points: List[Tuple[int, float]],
+    ctx: Optional[PlatformContext] = None,
 ) -> int:
-    """Write ``[(ts, value)]`` to InfluxDB under ``field_name``; return the count
-    written (0 if the sink is off/unconfigured, ``points`` is empty, or the
-    write fails)."""
-    import httpx  # lazy: keep `import minder_plugin_sdk` working without httpx
-
-    if not (cfg and points):
+    """Write ``[(ts, value)]`` (``ts`` in seconds) under ``field_name``; return
+    the count written (0 if the sink is off/unconfigured, ``points`` is empty, or
+    the write fails). Through ``ctx.timeseries.write`` when ``ctx`` grants
+    ``timeseries.write`` (``cfg`` is then unused), else straight to InfluxDB."""
+    if not points:
+        return 0
+    api = _timeseries(ctx, CAP_TIMESERIES_WRITE)
+    if api is None and not cfg:
         return 0
     if not safe_pattern.fullmatch(tag_value):
         logger.warning(f"Skipping influx write for unsafe {tag_key}: {tag_value!r}")
         return 0
-    host, port = cfg.get("host", "minder-influxdb"), cfg.get("port", 8086)
-    org, bucket = cfg.get("org", "minder"), cfg.get("bucket", "minder-metrics")
     # Build each point through line_protocol: it escapes the measurement / tag /
     # field key and DROPS a non-finite (nan/inf) value — one bad point can no
     # longer 400 the whole batch and stall an incremental resume.
@@ -169,6 +222,21 @@ async def write_history(
     ]
     if not lines:
         return 0
+    if api is not None:
+        try:
+            return int(await api.write(lines, precision="s"))
+        except Exception as e:
+            logger.warning(
+                f"Time-series write failed for {tag_value}: {type(e).__name__}"
+            )
+            return 0
+
+    import httpx  # lazy: keep `import minder_plugin_sdk` working without httpx
+
+    if not cfg:  # narrows the type; already checked above
+        return 0
+    host, port = cfg.get("host", "minder-influxdb"), cfg.get("port", 8086)
+    org, bucket = cfg.get("org", "minder"), cfg.get("bucket", "minder-metrics")
     try:
         async with httpx.AsyncClient(timeout=http_timeout) as client:
             resp = await client.post(

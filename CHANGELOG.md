@@ -52,6 +52,23 @@ of process, where plugin code holds no platform credentials.
 - Rules for plugin authors: return JSON-serialisable results, and don't share
   memory between plugins.
 
+### Platform time-series capability
+- `context`: `ctx.timeseries` (`TimeseriesAPI`) with `write(lines,
+  precision="s")` and `latest(measurement, tag_key, tag_value, fields=None)`,
+  capabilities `timeseries.write` / `timeseries.latest` (`CAP_TIMESERIES_*`,
+  now in `HOST_CAPABILITIES`). Granted to plugins that declare `TIMESERIES`;
+  the platform limits them to the declared measurements and sets the owner and
+  plugin tags. The unbound context raises `CapabilityUnavailable`.
+- `write_history` / `latest_influx_date` take an optional `ctx=` (pass
+  `self.ctx`). When that context grants `timeseries.*`, they go through
+  `ctx.timeseries` and never contact InfluxDB (`cfg` is unused), so they work
+  for a plugin hosted out of process. Without a context, with the unbound
+  context, or without the grant they keep the direct InfluxDB path unchanged.
+  Both still never raise.
+- `FakePlatformContext`: `ctx.timeseries`, with `timeseries_latest` answers and
+  the written lines in `timeseries_lines`; `for_plugin` grants `timeseries.*`
+  when the plugin declares `TIMESERIES`.
+
 ### Examples & docs
 - Webhook-mode plugin example: `examples/webhook_manifest.yaml` (the installable
   manifest + webhook shape) and `examples/webhook_plugin.py` (a `handle_webhook`
