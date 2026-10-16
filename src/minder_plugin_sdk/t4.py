@@ -113,6 +113,7 @@ __all__ = [
     "load_ed25519_seed",
     "origin_of",
     "normalize_authority",
+    "authority_from_origin",
     "query_component",
 ]
 
@@ -143,6 +144,12 @@ SUPPORTED_COMPONENTS = (METHOD, AUTHORITY, PATH, QUERY, CONTENT_DIGEST, AUTHORIZ
 #: Components every signature must cover.
 REQUIRED_COMPONENTS = (METHOD, AUTHORITY, PATH, QUERY, CONTENT_DIGEST)
 _DEFAULT_PORTS = {"https": 443, "http": 80}
+# host[:port] after lowercasing: an ASCII reg-name or a bracketed IPv6
+# literal (no zone id), and a 1-5 digit port. The same pattern the platform's
+# verifier uses.
+_AUTHORITY = re.compile(
+    r"^(\[[0-9a-f:.]+\]|[a-z0-9\-._~%!$&'()*+,;=]+)(?::([0-9]{1,5}))?\Z"
+)
 _PARAM_ORDER = ("created", "nonce", "keyid", "alg")
 
 _KEYID = re.compile(r"^[A-Za-z0-9._:\-]{1,128}\Z")
@@ -489,32 +496,39 @@ def _signature_params_value(
 # ── the signature base ───────────────────────────────────────────────────────
 
 
-def normalize_authority(value: str, scheme: str = "https") -> str:
-    """The ``@authority`` form of a host (RFC 9421 section 2.2.3): lowercase,
-    IPv6 in brackets, the scheme's default port dropped. ``value`` is
-    ``host``, ``host:port`` or an absolute URL (whose own scheme then counts).
-    Raises ValueError for anything else."""
-    text = value.strip()
-    if "://" in text:
-        parts = urlsplit(text)
-        scheme = parts.scheme.lower()
-    else:
-        parts = urlsplit("//" + text)
-        if parts.path or parts.query or parts.fragment:
-            raise ValueError("an authority is host[:port]")
-    try:
-        port = parts.port
-    except ValueError as e:
-        raise ValueError("invalid port") from e
-    host = (parts.hostname or "").lower()
-    if not host or parts.username is not None or parts.password is not None:
-        raise ValueError("an authority is host[:port], without credentials")
-    if _UNSAFE_PATH.search(host) or "/" in host:
-        raise ValueError("invalid host")
-    netloc = f"[{host}]" if ":" in host else host
-    if port is not None and port != _DEFAULT_PORTS.get(scheme.lower()):
-        netloc = f"{netloc}:{port}"
-    return netloc
+def normalize_authority(authority: str, scheme: str = "https") -> str:
+    """The ``@authority`` form of ``host[:port]`` (RFC 9421 section 2.2.3):
+    lowercase, the scheme's default port (443 for https, 80 for http) dropped.
+
+    Strict, like the platform's verifier: the host is an ASCII reg-name or a
+    bracketed IPv6 literal without a zone id, and the port is 1-65535.
+    Raises ValueError for anything else (userinfo, a path, whitespace, a
+    non-ASCII host, ``host:`` with an empty port, port 0...). For a URL use
+    :func:`authority_from_origin`."""
+    scheme = scheme.lower()
+    if scheme not in _DEFAULT_PORTS:
+        raise ValueError("scheme must be http or https")
+    text = authority.strip().lower() if isinstance(authority, str) else ""
+    m = _AUTHORITY.match(text)
+    if not m:
+        raise ValueError("authority must be host[:port]")
+    host, port = m.group(1), m.group(2)
+    if port is not None and not 0 < int(port) < 65536:
+        raise ValueError("authority port out of range")
+    if port is None or int(port) == _DEFAULT_PORTS[scheme]:
+        return host
+    return f"{host}:{int(port)}"
+
+
+def authority_from_origin(origin: str) -> str:
+    """The normalised ``@authority`` of an origin URL (``https://host[:port]``,
+    a trailing ``/`` allowed, nothing else)."""
+    parts = urlsplit(origin.strip())
+    if parts.scheme.lower() not in _DEFAULT_PORTS or not parts.netloc:
+        raise ValueError("origin must be an http(s) URL")
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        raise ValueError("origin must not carry a path, query or fragment")
+    return normalize_authority(parts.netloc, parts.scheme)
 
 
 def query_component(query: str) -> str:
@@ -617,9 +631,10 @@ def sign_request(
     """The ``Content-Digest``, ``Signature-Input`` and ``Signature`` headers
     for a request.
 
-    ``authority`` is the host the request goes to (``host[:port]`` or the
-    URL; normalised here). ``path`` is the absolute path as sent and ``query``
-    the raw query string sent with it (``""`` for none). Pass the request's
+    ``authority`` is the ``host[:port]`` the request goes to (normalised here;
+    see :func:`authority_from_origin` for a URL). ``path`` is the absolute
+    path as sent and ``query`` the raw query string sent with it (``""`` for
+    none). Pass the request's
     ``Authorization`` value as ``authorization`` to cover it; the request must
     then carry exactly that header. ``created`` defaults to now, ``nonce`` to
     a fresh one."""
@@ -994,18 +1009,19 @@ def _is_loopback(host: str) -> bool:
 
 
 def origin_of(url: str) -> str:
-    """``scheme://host[:port]`` of an absolute URL, lowercased and without the
-    scheme's default port (the ``@authority`` form). Only ``https``
-    is accepted, plus ``http`` to a loopback host for local development.
-    Raises ValueError otherwise."""
+    """``scheme://host[:port]`` of an absolute URL, in ``@authority`` form
+    (lowercase, default port dropped); a path is allowed and ignored. Only
+    ``https`` is accepted, plus ``http`` to a loopback host for local
+    development. Raises ValueError otherwise."""
     parts = urlsplit(url.strip())
     scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS or not parts.netloc:
+        raise ValueError("expected an absolute http(s) URL")
+    authority = normalize_authority(parts.netloc, scheme)
     host = (parts.hostname or "").lower()
-    if not host or parts.username or parts.password:
-        raise ValueError("expected an absolute http(s) URL without credentials")
-    if scheme != "https" and not (scheme == "http" and _is_loopback(host)):
+    if scheme != "https" and not _is_loopback(host):
         raise ValueError("Minder URLs must be https (http only to loopback)")
-    return f"{scheme}://{normalize_authority(url)}"
+    return f"{scheme}://{authority}"
 
 
 def _parse_jwks(document: Any) -> Dict[str, "Ed25519PublicKey"]:
@@ -1040,19 +1056,28 @@ class StaticKeySet:
         return self._keys.get(kid)
 
 
+#: The largest key-set document read; a bigger one is refused.
+MAX_JWKS_BYTES = 64 * 1024
+
+
 class MinderKeySet:
     """Minder's signing keys, fetched from ``<minder>/.well-known/minder/
     plugin-jwks.json`` and cached.
 
     - The set is cached for ``ttl`` seconds (300, the endpoint's own max-age).
-    - An unknown ``kid`` triggers a re-fetch (Minder rotated its key), at most
-      once per ``min_refetch_interval`` seconds, so requests naming random
-      kids can't turn into a flood of fetches.
+    - A known ``kid`` never waits on the network: within ``ttl`` it is served
+      from the cache; after it (up to ``max_stale``) it is still served while
+      one refresh runs in the background (stale-while-revalidate).
+    - An unknown ``kid`` (Minder rotated its key) waits for a re-fetch. Fetches
+      are single-flight (concurrent callers share one) and start at most once
+      per ``min_refetch_interval`` seconds, so requests naming random kids
+      can't turn into a flood of fetches.
     - When a re-fetch fails, the last good set stays usable for ``max_stale``
       seconds; with no usable set, :meth:`get` raises
       :class:`KeySetUnavailable`.
     - Only public OKP/Ed25519 keys whose ``kid`` is their RFC 7638 thumbprint
-      are used. Redirects are not followed.
+      are used. Redirects are not followed, and a document over
+      ``max_bytes`` (64 KiB) is refused while it streams.
     """
 
     def __init__(
@@ -1063,6 +1088,7 @@ class MinderKeySet:
         min_refetch_interval: float = 30.0,
         max_stale: float = 3600.0,
         timeout: float = 5.0,
+        max_bytes: int = MAX_JWKS_BYTES,
         client: Optional["httpx.AsyncClient"] = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -1071,12 +1097,13 @@ class MinderKeySet:
         self._min_refetch = min_refetch_interval
         self._max_stale = max_stale
         self._timeout = timeout
+        self._max_bytes = max_bytes
         self._client = client
         self._clock = clock
         self._keys: Dict[str, "Ed25519PublicKey"] = {}
         self._fetched_at: Optional[float] = None  # last successful fetch
         self._attempted_at: Optional[float] = None  # last attempt
-        self._lock = asyncio.Lock()
+        self._inflight: Optional["asyncio.Task[None]"] = None
 
     async def _fetch(self) -> Dict[str, "Ed25519PublicKey"]:
         try:
@@ -1088,18 +1115,22 @@ class MinderKeySet:
             ) from exc
         client = self._client or httpx.AsyncClient(trust_env=False)
         try:
-            response = await client.get(
-                self.url, timeout=self._timeout, follow_redirects=False
-            )
+            async with client.stream(
+                "GET", self.url, timeout=self._timeout, follow_redirects=False
+            ) as response:
+                if response.status_code != 200:
+                    raise ValueError(f"key set answered HTTP {response.status_code}")
+                data = bytearray()
+                async for chunk in response.aiter_bytes():
+                    data.extend(chunk)
+                    if len(data) > self._max_bytes:
+                        raise ValueError("key set document too large")
         finally:
             if self._client is None:
                 await client.aclose()
-        if response.status_code != 200:
-            raise ValueError(f"key set answered HTTP {response.status_code}")
-        return _parse_jwks(response.json())
+        return _parse_jwks(json.loads(bytes(data)))
 
     async def _refresh(self) -> None:
-        self._attempted_at = self._clock()
         try:
             keys = await self._fetch()
         except Exception as e:  # noqa: BLE001 - any failure leaves the old set
@@ -1108,8 +1139,25 @@ class MinderKeySet:
         self._keys = keys
         self._fetched_at = self._clock()
 
+    def _start_refresh(self) -> "asyncio.Task[None]":
+        """The running fetch, or a new one (single-flight)."""
+        if self._inflight is None:
+            self._attempted_at = self._clock()
+            task = asyncio.ensure_future(self._refresh())
+            self._inflight = task
+            task.add_done_callback(self._refresh_done)
+        return self._inflight
+
+    def _refresh_done(self, task: "asyncio.Task[None]") -> None:
+        if self._inflight is task:
+            self._inflight = None
+
     def _age(self) -> Optional[float]:
         return None if self._fetched_at is None else self._clock() - self._fetched_at
+
+    def _usable(self) -> bool:
+        age = self._age()
+        return age is not None and age <= self._ttl + self._max_stale
 
     def _may_retry(self) -> bool:
         return (
@@ -1119,12 +1167,15 @@ class MinderKeySet:
 
     async def get(self, kid: str) -> Optional["Ed25519PublicKey"]:
         """The public key for ``kid``, or None when Minder doesn't publish it."""
-        async with self._lock:
+        key = self._keys.get(kid) if self._usable() else None
+        if key is not None:
             age = self._age()
-            expired = age is None or age > self._ttl
-            if (expired or kid not in self._keys) and self._may_retry():
-                await self._refresh()
-            age = self._age()
-            if age is None or age > self._ttl + self._max_stale:
-                raise KeySetUnavailable("Minder's key set is unavailable")
-            return self._keys.get(kid)
+            if age is not None and age > self._ttl and self._may_retry():
+                self._start_refresh()  # in the background; this caller doesn't wait
+            return key
+        if self._inflight is not None or self._may_retry():
+            # shield: one caller giving up must not cancel the shared fetch.
+            await asyncio.shield(self._start_refresh())
+        if not self._usable():
+            raise KeySetUnavailable("Minder's key set is unavailable")
+        return self._keys.get(kid)

@@ -11,7 +11,7 @@ Run it (see README.md in this directory)::
     export MINDER_PLUGIN_INSTALLATION_KEY=...   # base64 of the 32-byte seed
     minder-plugin serve examples/remote_echo/echo_plugin.py \\
         --minder-url https://minder.example \\
-        --public-authority echo.example --port 8080
+        --public-authority echo.example --installation-id <id> --port 8080
 """
 
 from typing import Any, Dict

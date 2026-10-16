@@ -74,7 +74,12 @@ used.
   app.
   - It serves a signed `POST /minder/v1/invoke` (envelope `kind`, `target`,
     `kwargs`, `deadline_ms`) and `GET /minder/v1/health`.
-  - It checks `@authority` against the configured `--public-authority`.
+  - It checks `@authority` against the configured `--public-authority`, and
+    the envelope's `installation_id` against `--installation-id`. Both are
+    required; `--insecure-host-authority` (local development only) is the one
+    opt-out.
+  - Sync targets run in a worker thread, so `deadline_ms` applies to them
+    and they don't stall the event loop.
   - Errors are JSON with stable codes and no tracebacks.
   - `current_invocation()` exposes the invocation.
 - `t4_callbacks.CallbackPlatformContext` is `self.ctx` for remote plugins.

@@ -228,6 +228,8 @@ class CallbackPlatformContext:
         origin = origin_of(callback_base)
         base_path = urlsplit(callback_base.strip()).path.rstrip("/")
         self._origin = origin
+        # origin_of returns scheme://<normalised @authority>.
+        self._authority = origin.split("://", 1)[1]
         self._base_path = base_path
         self._grant = grant
         self._key = key
@@ -269,7 +271,7 @@ class CallbackPlatformContext:
         headers.update(
             self._key.sign_request(
                 method="POST",
-                authority=self._origin,
+                authority=self._authority,
                 path=path,
                 query="",
                 body=body,

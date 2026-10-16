@@ -16,13 +16,28 @@ routes:
 
     ``kind: "tool"`` runs the ``AI_TOOLS`` entry named ``target`` (through its
     ``action``); ``kind: "action"`` runs the method ``target`` from
-    ``ACTIONS``. The call is bounded by ``deadline_ms``. While it runs,
+    ``ACTIONS``. The call is bounded by ``deadline_ms``. A synchronous
+    (non-``async``) target runs in a worker thread so it can't stall the event
+    loop; when its deadline passes the server answers 504, but Python can't
+    kill a thread, so the call keeps running in the background until it
+    returns. Prefer ``async`` targets, and keep sync ones short. While it runs,
     ``self.ctx`` is a :class:`~minder_plugin_sdk.t4_callbacks.
     CallbackPlatformContext` for this invocation's grant, and
     :func:`current_invocation` describes the invocation.
 
 ``GET /minder/v1/health``
     Signed the same way; answers the plugin's ``health_check()``.
+
+Every signature must cover this server's own ``@authority`` (the
+``public_authority`` it is configured with, never the request's ``Host``) and
+``installation_id`` must match the envelope's, so a request Minder signed for
+another plugin or installation is refused. :func:`create_app` refuses to start
+without both unless ``insecure_host_authority=True`` (local development only).
+
+``@path`` is verified as the route this server serves (``path_prefix`` plus
+``/minder/v1/invoke`` or ``/minder/v1/health``), not the raw path received:
+stricter than a raw target, since an alias of the route (``//minder/...``,
+percent-encoded segments) can never match a signature made for another path.
 
 Every answer is JSON. Success is ``{"ok": true, "invocation_id", "result"}``;
 a failure is ``{"ok": false, "invocation_id", "error": {"code", "message"}}``
@@ -32,7 +47,7 @@ with a stable ``code`` and never a traceback (that goes to the server log):
 400   ``invalid_envelope``, ``unsupported_contract``, ``unsupported_kind``,
       ``invalid_arguments``
 401   ``invalid_signature`` (``error.reason`` says why, e.g. ``nonce_replayed``)
-403   ``wrong_installation``
+403   ``wrong_installation`` (``error.reason``: ``installation_mismatch``)
 404   ``unknown_target``
 413   ``payload_too_large``
 424   ``capability_denied``, ``capability_unavailable``, ``capability_invalid``
@@ -88,6 +103,7 @@ from .t4 import (
     MinderKeySet,
     NonceCache,
     SignatureError,
+    authority_from_origin,
     normalize_authority,
     origin_of,
     verify_request,
@@ -283,7 +299,10 @@ def parse_envelope(
         ids[name] = value
     if installation_id is not None and ids["installation_id"] != installation_id:
         raise InvocationError(
-            403, "wrong_installation", "not addressed to this installation"
+            403,
+            "wrong_installation",
+            "not addressed to this installation",
+            reason="installation_mismatch",
         )
     kind = envelope.get("kind")
     if kind not in KINDS:
@@ -485,7 +504,14 @@ class _Server:
         _CONTEXT.set(self._context_for(invocation, started))
 
         async def call() -> Any:
-            result = method(**invocation.kwargs)
+            if inspect.iscoroutinefunction(method):
+                result = method(**invocation.kwargs)
+            else:
+                # A sync target runs in a thread (with this task's context),
+                # so a blocking call can't stall the event loop and the
+                # deadline below still applies. A timed-out thread can't be
+                # killed: it keeps running until the call returns.
+                result = await asyncio.to_thread(method, **invocation.kwargs)
             if inspect.isawaitable(result):
                 result = await result
             return result
@@ -562,6 +588,7 @@ def create_app(
     callback_origins: Optional[Iterable[str]] = None,
     path_prefix: str = "",
     public_authority: Optional[str] = None,
+    insecure_host_authority: bool = False,
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
     default_deadline_ms: int = DEFAULT_DEADLINE_MS,
     max_deadline_ms: int = MAX_DEADLINE_MS,
@@ -578,16 +605,20 @@ def create_app(
       only go to its origin unless ``callback_origins`` says otherwise.
     - ``installation_key``: signs this plugin's callbacks; without it
       ``self.ctx`` calls raise ``CapabilityUnavailable``.
-    - ``installation_id``: when set, invocations for another installation are
-      refused (403).
+    - ``installation_id``: this installation's id. Required: an invocation for
+      another installation is refused (403, ``installation_mismatch``).
     - ``nonce_cache``: per-process by default; give several replicas a shared
       one (see :class:`~minder_plugin_sdk.t4.NonceCache`).
-    - ``public_authority``: this server's public ``host[:port]`` (or URL), the
-      one in the installation's endpoint. Every signature covers
-      ``@authority``; the server checks it against this value, so a request
-      Minder signed for another plugin can't be replayed here. Without it the
-      request's ``Host`` header is used (with a warning), which the sender
-      controls: set it in production.
+    - ``public_authority``: this server's public ``host[:port]`` (or its
+      origin URL), the one in the installation's endpoint. Required: every
+      signature covers ``@authority`` and the server checks it against this
+      value, so a request Minder signed for another plugin can't be replayed
+      here.
+    - ``insecure_host_authority``: LOCAL DEVELOPMENT ONLY. Start without
+      ``public_authority`` and/or ``installation_id``: ``@authority`` is then
+      checked against the request's ``Host`` header, which the sender controls,
+      and the installation is not checked, so cross-plugin replay is possible.
+      Logged as an error at startup.
     - ``path_prefix``: the external path prefix when a reverse proxy mounts
       the app below ``/`` (the signature covers the path Minder addressed).
     - ``http_client``: an ``httpx.AsyncClient`` for callbacks (tests).
@@ -596,13 +627,36 @@ def create_app(
     ``shutdown()`` at shutdown.
     """
     origin = origin_of(minder_url)
-    authority = (
-        None if public_authority is None else normalize_authority(public_authority)
-    )
-    if authority is None:
-        logger.warning(
-            "no public_authority configured: verifying @authority against the "
-            "Host header; set it to your endpoint's host"
+    authority: Optional[str] = None
+    if public_authority:
+        authority = (
+            authority_from_origin(public_authority)
+            if "://" in public_authority
+            else normalize_authority(public_authority)
+        )
+    if not installation_id:
+        installation_id = None
+    missing = [
+        name
+        for name, value in (
+            ("public_authority", authority),
+            ("installation_id", installation_id),
+        )
+        if value is None
+    ]
+    if missing and not insecure_host_authority:
+        raise ValueError(
+            f"{' and '.join(missing)} required: without them a request signed "
+            "for another plugin or installation could be replayed here "
+            "(insecure_host_authority=True allows it for local development only)"
+        )
+    if missing:
+        logger.error(
+            "INSECURE: serving without %s (insecure_host_authority). @authority "
+            "is checked against the Host header and/or the installation is not "
+            "checked: requests signed for OTHER plugins can be replayed here. "
+            "Local development only; never expose this server.",
+            " and ".join(missing),
         )
     if path_prefix and (not path_prefix.startswith("/") or path_prefix.endswith("/")):
         raise ValueError("path_prefix must start with / and not end with /")

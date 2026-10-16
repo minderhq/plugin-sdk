@@ -185,6 +185,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             installation_id=args.installation_id,
             path_prefix=args.path_prefix,
             public_authority=args.public_authority,
+            insecure_host_authority=args.insecure_host_authority,
         )
     except ValueError as exc:
         print(f"FAIL {exc}")
@@ -218,7 +219,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     sv.add_argument("--minder-url", default=None, help="default: $MINDER_URL")
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8080)
-    sv.add_argument("--installation-id", default=None)
+    sv.add_argument(
+        "--installation-id",
+        default=os.environ.get("MINDER_PLUGIN_INSTALLATION_ID"),
+        help=(
+            "this installation's id; invocations for another one are refused "
+            "(default: $MINDER_PLUGIN_INSTALLATION_ID; required)"
+        ),
+    )
     sv.add_argument(
         "--installation-key-env",
         default=DEFAULT_KEY_ENV,
@@ -230,7 +238,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=(
             "this server's public host[:port] as in the installation's endpoint; "
             "signatures for another host are refused (default: "
-            "$MINDER_PLUGIN_PUBLIC_AUTHORITY, else the Host header)"
+            "$MINDER_PLUGIN_PUBLIC_AUTHORITY; required)"
+        ),
+    )
+    sv.add_argument(
+        "--insecure-host-authority",
+        action="store_true",
+        help=(
+            "LOCAL DEVELOPMENT ONLY: allow a missing --public-authority or "
+            "--installation-id (checks the Host header instead, so requests "
+            "signed for other plugins can be replayed here)"
         ),
     )
     sv.add_argument("--path-prefix", default="", help="external path prefix")

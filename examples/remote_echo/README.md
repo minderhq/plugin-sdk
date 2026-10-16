@@ -22,12 +22,23 @@ export MINDER_PLUGIN_INSTALLATION_KEY="$(python -c 'import base64,os;print(base6
 minder-plugin serve examples/remote_echo/echo_plugin.py \
     --minder-url https://minder.example \
     --public-authority echo.example \
+    --installation-id <the id Minder gave this installation> \
     --host 127.0.0.1 --port 8080
 ```
 
-`--public-authority` is the host in the installation's endpoint
-(`https://echo.example`). Every signature covers it, so a request Minder signed
-for another plugin is refused here.
+Both of these flags are required, and the server refuses to start without
+them:
+
+- `--public-authority` is the host in the installation's endpoint
+  (`https://echo.example`). Every signature covers it, so a request Minder
+  signed for another plugin is refused here.
+- `--installation-id` must match the invocation's `installation_id`.
+  Otherwise the server answers `403` with the reason `installation_mismatch`.
+
+They can also be set with `MINDER_PLUGIN_PUBLIC_AUTHORITY` and
+`MINDER_PLUGIN_INSTALLATION_ID`. For a quick local try without Minder,
+`--insecure-host-authority` drops both requirements. It is insecure, logs an
+error, and must never be exposed.
 
 On startup the command prints the key's `keyid`, which is the RFC 7638
 thumbprint Minder knows the key by. Put a TLS-terminating reverse proxy in

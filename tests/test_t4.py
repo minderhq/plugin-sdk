@@ -165,26 +165,75 @@ def test_signature_base_layout():
     t4.public_key_from_jwk(KEY["public_jwk"]).verify(signature, expected)
 
 
+# The normalisation cases mirror the platform's own tests, so both sides
+# accept and refuse exactly the same authorities.
 @pytest.mark.parametrize(
-    "value, expected",
+    "value, scheme, expected",
     [
-        ("plugin.example", "plugin.example"),
-        ("Plugin.Example:443", "plugin.example"),
-        ("plugin.example:8443", "plugin.example:8443"),
-        ("https://Plugin.example:443/x?y", "plugin.example"),
-        ("http://localhost:80", "localhost"),
-        ("http://localhost:8080", "localhost:8080"),
-        ("[2001:DB8::1]:443", "[2001:db8::1]"),
+        ("Plugin.Example.COM", "https", "plugin.example.com"),
+        ("plugin.example.com:443", "https", "plugin.example.com"),
+        ("plugin.example.com:80", "http", "plugin.example.com"),
+        ("plugin.example.com:80", "https", "plugin.example.com:80"),
+        ("plugin.example.com:8443", "https", "plugin.example.com:8443"),
+        ("[2001:DB8::1]:443", "https", "[2001:db8::1]"),
+        ("10.0.0.5:08443", "https", "10.0.0.5:8443"),
     ],
 )
-def test_authority_normalisation(value, expected):
-    assert t4.normalize_authority(value) == expected
+def test_authority_normalisation(value, scheme, expected):
+    assert t4.normalize_authority(value, scheme) == expected
 
 
-@pytest.mark.parametrize("bad", ["", "a b", "u:p@host", "host/path", "host:99999"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        # the platform's cases
+        "",
+        "user@host",
+        "host/path",
+        "host:99999",
+        "host:",
+        "ho st",
+        "host:1:2",
+        # port 0, a non-ASCII host, IPv6 zone ids, a URL
+        "host:0",
+        "plügin.example",
+        "[fe80::1%eth0]",
+        "[fe80::1%25eth0]:443",
+        "fe80::1",
+        "https://plugin.example",
+    ],
+)
 def test_authority_refusals(bad):
     with pytest.raises(ValueError):
         t4.normalize_authority(bad)
+    with pytest.raises(ValueError):
+        t4.normalize_authority(bad, "http")
+
+
+@pytest.mark.parametrize(
+    "origin, expected",
+    [
+        ("https://Plugin.example:443", "plugin.example"),
+        ("https://plugin.example/", "plugin.example"),
+        ("http://localhost:80", "localhost"),
+        ("http://localhost:8080", "localhost:8080"),
+    ],
+)
+def test_authority_from_origin(origin, expected):
+    assert t4.authority_from_origin(origin) == expected
+
+
+@pytest.mark.parametrize(
+    "origin", ["ftp://host", "https://host/path", "https://host?q", "host", ""]
+)
+def test_authority_from_origin_refuses_non_origins(origin):
+    with pytest.raises(ValueError):
+        t4.authority_from_origin(origin)
+
+
+def test_scheme_must_be_http_or_https():
+    with pytest.raises(ValueError):
+        t4.normalize_authority("plugin.example", "ftp")
 
 
 def test_query_component():
@@ -235,7 +284,7 @@ def vector_parts(case):
     """method, authority, path, query, body of a vector request. A request
     names its ``origin``, normalised ``authority`` and raw ``target``."""
     request = case["request"]
-    assert t4.normalize_authority(request["origin"]) == request["authority"]
+    assert t4.authority_from_origin(request["origin"]) == request["authority"]
     path, _, query = request["target"].partition("?")
     return (
         request["method"],
@@ -604,10 +653,71 @@ def test_key_set_caches_and_refetches_on_unknown_kid():
     for _ in range(5):
         assert run(keys.get("unknown-kid")) is None
     assert len(server.requests) == 2
-    # TTL expiry refreshes.
+    # TTL expiry: the known key is served at once and refreshed in the
+    # background (stale-while-revalidate).
     now[0] += 301
-    run(keys.get(KEY["keyid"]))
+
+    async def stale_get():
+        key = await keys.get(KEY["keyid"])
+        assert key is not None
+        assert keys._inflight is not None  # refresh started, not awaited
+        await keys._inflight
+
+    run(stale_get())
     assert len(server.requests) == 3
+
+
+class SlowJwks:
+    """A key-set endpoint that answers only when released."""
+
+    def __init__(self, document):
+        self.document = document
+        self.requests = 0
+        self.release = None
+
+    async def __call__(self, request):
+        self.requests += 1
+        await self.release.wait()
+        return httpx.Response(200, json=self.document)
+
+
+def test_known_kids_never_wait_and_refetches_are_single_flight():
+    rotated = InstallationKey.generate()
+    endpoint = SlowJwks({"keys": [KEY["public_jwk"], rotated.public_jwk()]})
+    now = [0.0]
+    keys = key_set(endpoint, now)
+    # Prime the cache with the known key.
+    keys._keys = {KEY["keyid"]: t4.public_key_from_jwk(KEY["public_jwk"])}
+    keys._fetched_at = 0.0
+
+    async def scenario():
+        endpoint.release = asyncio.Event()
+        unknown = [asyncio.ensure_future(keys.get(rotated.keyid)) for _ in range(5)]
+        for _ in range(100):  # until the fetch is held at the endpoint
+            if endpoint.requests:
+                break
+            await asyncio.sleep(0.001)
+        assert keys._inflight is not None and endpoint.requests == 1
+        # While the refetch is in flight, a known kid answers immediately.
+        known = await asyncio.wait_for(keys.get(KEY["keyid"]), 0.5)
+        assert known is not None
+        assert endpoint.requests == 1  # one fetch for five callers
+        endpoint.release.set()
+        results = await asyncio.gather(*unknown)
+        assert all(r is not None for r in results)
+        assert endpoint.requests == 1
+
+    run(scenario())
+
+
+def test_key_set_body_is_capped_while_streaming():
+    big = {"keys": [KEY["public_jwk"]], "padding": "x" * (64 * 1024)}
+    keys = key_set(JwksServer([big]), [0.0])
+    with pytest.raises(KeySetUnavailable):
+        run(keys.get(KEY["keyid"]))
+    small = key_set(JwksServer([{"keys": [KEY["public_jwk"]]}]), [0.0], max_bytes=10)
+    with pytest.raises(KeySetUnavailable):
+        run(small.get(KEY["keyid"]))
 
 
 def test_key_set_skips_keys_whose_kid_is_not_the_thumbprint():

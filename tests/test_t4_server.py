@@ -313,10 +313,59 @@ def test_path_prefix_is_part_of_the_signed_path():
         assert post(test_client, body, headers).status_code == 200
 
 
-def test_host_header_fallback_without_a_public_authority():
-    test_client, _ = make_client(public_authority=None)
+@pytest.mark.parametrize(
+    "missing",
+    [
+        {"public_authority": None},
+        {"installation_id": None},
+        {"public_authority": None, "installation_id": None},
+        {"public_authority": "", "installation_id": ""},
+    ],
+)
+def test_create_app_refuses_to_start_without_authority_or_installation(missing):
+    with pytest.raises(ValueError) as info:
+        make_client(**missing)
+    assert "required" in str(info.value)
+
+
+def test_cross_plugin_replay_is_refused():
+    """The review's reproduction: a request Minder signed for plugin-a, sent to
+    this server (plugin-b) with ``Host: plugin-a.example``. With the default
+    (secure) configuration it is refused; the old Host-header fallback ran it."""
+    body = envelope()
+    headers = minder_headers(body, authority="plugin-a.example")
+    headers["Host"] = "plugin-a.example"
+
+    test_client, _ = make_client(public_authority="plugin-b.example")
+    with test_client:
+        refused(post(test_client, body, headers), "bad_signature")
+
+    # Only the explicit development opt-in restores the Host fallback, loudly.
+    test_client, _ = make_client(public_authority=None, insecure_host_authority=True)
+    with test_client:
+        assert post(test_client, body, headers).status_code == 200
+
+
+def test_insecure_mode_logs_an_error(caplog):
+    with caplog.at_level("ERROR", logger="minder_plugin_sdk.t4_server"):
+        make_client(installation_id=None, insecure_host_authority=True)
+    assert any("INSECURE" in r.getMessage() for r in caplog.records)
+
+
+def test_public_authority_may_be_an_origin_url():
+    test_client, _ = make_client(public_authority="https://Plugin.Example:443")
     with test_client:
         assert post(test_client, envelope()).status_code == 200
+    with pytest.raises(ValueError):
+        make_client(public_authority="https://plugin.example/path")
+    with pytest.raises(ValueError):
+        make_client(public_authority="plugin.example:0")
+
+
+def test_wrong_installation_has_a_reason(client):
+    response = post(client, envelope(installation_id="inst-2"))
+    assert response.status_code == 403
+    assert response.json()["error"]["reason"] == "installation_mismatch"
 
 
 # ── envelope and dispatch errors ─────────────────────────────────────────────
@@ -451,6 +500,8 @@ def test_cli_serve_builds_the_app_and_runs_uvicorn(monkeypatch, capsys):
             MINDER,
             "--public-authority",
             AUTHORITY,
+            "--installation-id",
+            "inst-1",
             "--port",
             "9000",
         ]
@@ -469,9 +520,39 @@ def test_cli_serve_refusals(monkeypatch, capsys):
     assert cli.main(["serve", str(EXAMPLE), "--minder-url", MINDER]) == 2
     assert "not-a-key" not in capsys.readouterr().out
     monkeypatch.delenv("MINDER_PLUGIN_INSTALLATION_KEY")
+    secure = ["--public-authority", AUTHORITY, "--installation-id", "inst-1"]
     assert (
-        cli.main(["serve", str(EXAMPLE), "--minder-url", "http://minder.example"]) == 2
+        cli.main(
+            ["serve", str(EXAMPLE), "--minder-url", "http://minder.example", *secure]
+        )
+        == 2
     )
+    # Without the public authority or the installation id it refuses to start.
+    for drop in ("--public-authority", "--installation-id"):
+        i = secure.index(drop)
+        args = secure[:i] + secure[i + 2 :]
+        capsys.readouterr()
+        assert cli.main(["serve", str(EXAMPLE), "--minder-url", MINDER, *args]) == 2
+        assert "required" in capsys.readouterr().out
+
+
+def test_cli_serve_insecure_opt_in(monkeypatch):
+    import uvicorn
+
+    monkeypatch.delenv("MINDER_PLUGIN_INSTALLATION_KEY", raising=False)
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+    args = ["serve", str(EXAMPLE), "--minder-url", MINDER, "--insecure-host-authority"]
+    assert cli.main(args) == 0
+
+
+def test_cli_serve_reads_authority_and_installation_from_the_environment(monkeypatch):
+    import uvicorn
+
+    monkeypatch.delenv("MINDER_PLUGIN_INSTALLATION_KEY", raising=False)
+    monkeypatch.setenv("MINDER_PLUGIN_PUBLIC_AUTHORITY", AUTHORITY)
+    monkeypatch.setenv("MINDER_PLUGIN_INSTALLATION_ID", "inst-1")
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+    assert cli.main(["serve", str(EXAMPLE), "--minder-url", MINDER]) == 0
 
 
 def test_example_passes_the_contract_checks():
@@ -518,6 +599,7 @@ def test_concurrent_invocations_keep_their_own_context():
         minder_url=MINDER,
         key_set=MINDER_KEYS,
         public_authority=AUTHORITY,
+        installation_id="inst-1",
         installation_key=INSTALLATION_KEY,
     )
 
@@ -546,3 +628,60 @@ def test_concurrent_invocations_keep_their_own_context():
     assert sorted((tag, grant) for tag, grant, _ in seen) == [
         (str(i), f"grant-{i}") for i in range(5)
     ]
+
+
+# ── sync targets ─────────────────────────────────────────────────────────────
+
+
+def test_blocking_sync_target_honours_the_deadline_and_frees_the_loop():
+    """A sync action that blocks (time.sleep) must not ignore deadline_ms nor
+    stall the event loop: it runs in a thread, the server answers 504 at the
+    deadline, and other requests are served meanwhile."""
+
+    class Blocking(RemoteEchoPlugin):
+        ACTIONS = frozenset({"echo", "block", "add"})
+
+        def block(self):
+            time.sleep(0.6)
+            return "late"
+
+        def add(self, a: int, b: int):
+            return a + b
+
+    app = create_app(
+        Blocking(),
+        minder_url=MINDER,
+        key_set=MINDER_KEYS,
+        public_authority=AUTHORITY,
+        installation_id="inst-1",
+    )
+
+    async def main():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url=f"https://{AUTHORITY}"
+        ) as http:
+
+            async def send(**overrides):
+                body = envelope(kind="action", invocation_id=new_nonce(), **overrides)
+                started = time.monotonic()
+                response = await http.post(
+                    "/minder/v1/invoke", content=body, headers=minder_headers(body)
+                )
+                return response, time.monotonic() - started
+
+            slow = asyncio.ensure_future(
+                send(target="block", kwargs={}, deadline_ms=100)
+            )
+            await asyncio.sleep(0.02)
+            echo, echo_took = await send(target="echo", kwargs={"text": "hi"})
+            blocked, blocked_took = await slow
+            plain, _ = await send(target="add", kwargs={"a": 1, "b": 2})
+            return echo, echo_took, blocked, blocked_took, plain
+
+    echo, echo_took, blocked, blocked_took, plain = asyncio.run(main())
+    assert blocked.status_code == 504
+    assert blocked.json()["error"]["code"] == "deadline_exceeded"
+    assert blocked_took < 0.5  # the deadline, not the 0.6 s sleep
+    assert echo.status_code == 200 and echo_took < 0.3  # the loop stayed free
+    assert plain.json()["result"] == 3  # sync targets still return normally

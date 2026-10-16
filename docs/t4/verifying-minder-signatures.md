@@ -31,9 +31,14 @@ The component values are as follows:
   with the default port (443 for `https`) dropped (RFC 9421 section 2.2.3).
   Take it from your configuration, never from the request's `Host` header,
   which the sender controls. This stops a request Minder signed for a
-  different plugin from being replayed against yours.
+  different plugin from being replayed against yours. The host is ASCII (a
+  reg-name, or a bracketed IPv6 literal without a zone id), and the port is
+  1-65535. Refuse anything else.
 - `@path` is the path Minder addressed, e.g. `/minder/v1/invoke`. If a reverse
-  proxy strips a prefix, use the external path.
+  proxy strips a prefix, use the external path. The simplest strict choice is
+  the route constant you serve, not the raw path you received, so an alias
+  of the route (`//minder/v1/invoke`, percent-encoded segments) can never
+  match. `minder-plugin serve` does this.
 - `@query` is `?` followed by the raw query string, exactly as it appears in
   the request target. When there is no query it is just `?` (RFC 9421
   section 2.2.7).
@@ -163,6 +168,9 @@ Refuse the request (`401`) at the first failure:
    means a clock step can't make the store forget a nonce while its signature
    is still fresh. With several replicas, use a shared store such as Redis
    `SET <keyid>:<nonce> 1 NX EXAT <created+310>`.
+9. **Installation.** Parse the (now authenticated) envelope, and check that
+   its `installation_id` is your own installation's id. If it isn't, refuse
+   it (`403`).
 
 ## Minder's key set
 

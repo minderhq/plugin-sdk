@@ -299,8 +299,14 @@ signed callbacks to Minder.
 pip install 'minder-plugin-sdk[serve]'
 export MINDER_PLUGIN_INSTALLATION_KEY=...   # base64 of the installation's 32-byte Ed25519 seed
 minder-plugin serve my_plugin.py --minder-url https://minder.example \
-    --public-authority plugin.example --port 8080
+    --public-authority plugin.example --installation-id <installation id> --port 8080
 ```
+
+`--public-authority` (your endpoint's host) and `--installation-id` are
+required, and the server refuses to start without them.
+`--insecure-host-authority` lifts that requirement for local development
+only. The server then checks the request's `Host` header instead, which lets
+requests signed for other plugins be replayed, and logs an error at startup.
 
 What the server does:
 
@@ -311,12 +317,19 @@ What the server does:
     `<minder>/.well-known/minder/plugin-jwks.json`. They are cached, and
     refetched when an unknown `keyid` appears.
   - `--public-authority` is your endpoint's host. A request Minder signed for
-    another plugin fails there.
+    another plugin fails there. An envelope for another `installation_id` gets
+    a `403` with the reason `installation_mismatch`.
+  - `@path` is checked as the route the server serves (`--path-prefix` plus
+    `/minder/v1/invoke`), not the raw path received. This is stricter than
+    a raw request target.
   - A signature older than 300 s, a replayed nonce or a body that doesn't
     match its digest gets a `401` with a stable `error.reason`.
 - **Dispatch.** The envelope's `kind` (`tool` or `action`), `target` and
   `kwargs` run the matching `AI_TOOLS` entry or declared `ACTIONS` method,
-  bounded by `deadline_ms`. Answers are JSON. Errors map to stable codes
+  bounded by `deadline_ms`. A synchronous target runs in a worker thread.
+  The deadline still answers `504` and the event loop stays free, but a
+  thread can't be killed, so a timed-out sync call keeps running in the
+  background. Prefer `async` targets. Answers are JSON. Errors map to stable codes
   (`unknown_target`, `invalid_arguments`, `capability_denied`,
   `deadline_exceeded`, ...) and never include a traceback.
 - **Callbacks.** While a call runs, `self.ctx` is a
