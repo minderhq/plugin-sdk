@@ -47,6 +47,7 @@ __all__ = [
     "PluginsAPI",
     "DocumentsAPI",
     "TelegrafAPI",
+    "TimeseriesAPI",
     "UnboundPlatformContext",
     "UNBOUND_CONTEXT",
     "HOST_CAPABILITIES",
@@ -56,6 +57,8 @@ __all__ = [
     "CAP_TELEGRAF_SET_MANAGED_REGION",
     "CAP_TELEGRAF_CLEAR_MANAGED_REGION",
     "CAP_TELEGRAF_RELOAD",
+    "CAP_TIMESERIES_WRITE",
+    "CAP_TIMESERIES_LATEST",
     "capability_granted",
 ]
 
@@ -64,13 +67,16 @@ __all__ = [
 # platform derives a plugin's grant from its declarations: its own secrets,
 # ``PluginMetadata.dependencies`` (plugins.invoke along those edges only),
 # ``REQUIRES`` (e.g. the ``rag`` bundle for documents.index) and ``MANAGES``
-# (``telegraf.*`` for ``MANAGES = ["telegraf"]``).
+# (``telegraf.*`` for ``MANAGES = ["telegraf"]``) and ``TIMESERIES``
+# (``timeseries.*``, scoped to the declared measurements).
 CAP_SECRETS_READ = "secrets.read"
 CAP_PLUGINS_INVOKE = "plugins.invoke"
 CAP_DOCUMENTS_INDEX = "documents.index"
 CAP_TELEGRAF_SET_MANAGED_REGION = "telegraf.set_managed_region"
 CAP_TELEGRAF_CLEAR_MANAGED_REGION = "telegraf.clear_managed_region"
 CAP_TELEGRAF_RELOAD = "telegraf.reload"
+CAP_TIMESERIES_WRITE = "timeseries.write"
+CAP_TIMESERIES_LATEST = "timeseries.latest"
 
 HOST_CAPABILITIES: FrozenSet[str] = frozenset(
     {
@@ -80,6 +86,8 @@ HOST_CAPABILITIES: FrozenSet[str] = frozenset(
         CAP_TELEGRAF_SET_MANAGED_REGION,
         CAP_TELEGRAF_CLEAR_MANAGED_REGION,
         CAP_TELEGRAF_RELOAD,
+        CAP_TIMESERIES_WRITE,
+        CAP_TIMESERIES_LATEST,
     }
 )
 
@@ -166,6 +174,35 @@ class TelegrafAPI(Protocol):
 
 
 @runtime_checkable
+class TimeseriesAPI(Protocol):
+    """The platform time-series store (capabilities ``timeseries.*``; granted
+    only to plugins that declare ``TIMESERIES``). The platform restricts the
+    plugin to its declared measurements and sets the owner and plugin tags
+    itself, so a plugin needs no store credentials."""
+
+    async def write(
+        self, lines: Union[str, Iterable[str]], precision: str = "s"
+    ) -> int:
+        """Write line-protocol ``lines`` (one string, or one line per item) with
+        timestamps in ``precision`` (``"s"``, ``"ms"``, ``"us"``, ``"ns"``).
+        Returns the number of points written."""
+        ...
+
+    async def latest(
+        self,
+        measurement: str,
+        tag_key: str,
+        tag_value: str,
+        fields: Optional[Iterable[str]] = None,
+    ) -> Union[None, str, Dict[str, Any]]:
+        """The newest point of the series ``measurement`` / ``tag_key=tag_value``
+        for the invoking owner: its timestamp (ISO 8601), or ``None`` when the
+        series is empty. With ``fields``, ``{"time": ..., "fields": {name:
+        value}}`` (a field the series never had is ``None``)."""
+        ...
+
+
+@runtime_checkable
 class PlatformContext(Protocol):
     """What ``self.ctx`` provides to a contract-v2 plugin."""
 
@@ -180,6 +217,9 @@ class PlatformContext(Protocol):
 
     @property
     def telegraf(self) -> TelegrafAPI: ...
+
+    @property
+    def timeseries(self) -> TimeseriesAPI: ...
 
     def has(self, capability: str) -> bool:
         """Whether ``capability`` is granted for this binding (see
@@ -231,6 +271,22 @@ class _UnboundTelegraf:
         raise _unbound(CAP_TELEGRAF_RELOAD)
 
 
+class _UnboundTimeseries:
+    async def write(
+        self, lines: Union[str, Iterable[str]], precision: str = "s"
+    ) -> int:
+        raise _unbound(CAP_TIMESERIES_WRITE)
+
+    async def latest(
+        self,
+        measurement: str,
+        tag_key: str,
+        tag_value: str,
+        fields: Optional[Iterable[str]] = None,
+    ) -> Union[None, str, Dict[str, Any]]:
+        raise _unbound(CAP_TIMESERIES_LATEST)
+
+
 class UnboundPlatformContext:
     """The context a plugin sees before (or without) a host binding: every call
     raises :class:`CapabilityUnavailable` and ``has()`` is always ``False``."""
@@ -240,6 +296,7 @@ class UnboundPlatformContext:
         self.plugins = _UnboundPlugins()
         self.documents = _UnboundDocuments()
         self.telegraf = _UnboundTelegraf()
+        self.timeseries = _UnboundTimeseries()
 
     def has(self, capability: str) -> bool:
         return False

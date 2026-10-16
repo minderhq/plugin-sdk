@@ -166,6 +166,7 @@ class CrawlerPlugin(PluginBase):
 | `await ctx.plugins.invoke(plugin, action, **kw)` | `plugins.invoke` | Only along a declared `PluginMetadata.dependencies` edge. |
 | `await ctx.documents.index(kb_id, filename, content, content_type)` | `documents.index` | Uploads on behalf of the invoking user. |
 | `await ctx.telegraf.set_managed_region(toml)` / `clear_managed_region()` / `reload(force=False)` | `telegraf.*` | Only for plugins with `MANAGES = ["telegraf"]`. The platform validates the TOML (allowlisted inputs, size caps) and writes it atomically. |
+| `await ctx.timeseries.write(lines, precision="s")` / `latest(measurement, tag_key, tag_value, fields=None)` | `timeseries.*` | Only for plugins that declare `TIMESERIES`, and only for the declared measurements. The platform sets the owner and plugin tags. `latest` returns the newest timestamp (or `None`), or `{"time", "fields"}` when `fields` is given. The `write_history` / `latest_influx_date` helpers use it when you pass `ctx=self.ctx`. |
 | `ctx.has(capability)` | — | Whether a capability is granted (`"telegraf"` matches any `telegraf.*`). |
 
 **Errors** (all subclasses of `PluginError`; messages name the capability and a
@@ -190,7 +191,7 @@ plugin. `PluginBase` implements it; a plain duck-typed class can define its own
 | `CONTRACT_VERSION` | `int` (default `1`) | `2` = uses `self.ctx`. A host refuses a plugin that declares a newer version than it supports, and `check_plugin` flags versions above `SUPPORTED_CONTRACT_VERSION`. |
 | `MANAGES` | `list[str]` | Platform-managed sidecars the plugin configures through `ctx.<name>.*` (currently `"telegraf"`). Requires `CONTRACT_VERSION = 2`. |
 | `EGRESS` | `"public"`, `"lan"`, or a list of host patterns | Where the plugin connects. Patterns are hostnames (`"api.example.com"`) or one-level wildcards (`"*.example.com"`); no scheme, port, path or IP. |
-| `TIMESERIES` | `{"measurements": [...]}` | The time-series measurements the plugin writes. Declared only, for now. |
+| `TIMESERIES` | `{"measurements": [...]}` | The time-series measurements the plugin writes and reads through `ctx.timeseries` (grants `timeseries.*`). |
 
 **Rules for plugin code** (enforced by `check_plugin` / `minder-plugin validate`):
 
@@ -272,11 +273,13 @@ def test_secret_denied():
 - `invoke_results`: `{(plugin, action): value or callable}`.
 - `telegraf_validator`: a callable that raises `CapabilityInvalid` to simulate a
   rejected region.
+- `timeseries_latest`: `{(measurement, tag_key, tag_value): point}` answers for
+  `ctx.timeseries.latest` (an ISO timestamp, or `{"time", "fields"}`).
 
 It records every call in `ctx.calls` with identifying arguments only (secret
 *keys*, never values; kwarg *names* for invokes; see
 `ctx.called("secrets.read")`), and keeps side effects in `ctx.indexed`,
-`ctx.telegraf_region` and `ctx.telegraf_reloads`.
+`ctx.telegraf_region`, `ctx.telegraf_reloads` and `ctx.timeseries_lines`.
 
 ## Worked example
 

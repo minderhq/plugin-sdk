@@ -35,6 +35,8 @@ from .context import (
     CAP_TELEGRAF_CLEAR_MANAGED_REGION,
     CAP_TELEGRAF_RELOAD,
     CAP_TELEGRAF_SET_MANAGED_REGION,
+    CAP_TIMESERIES_LATEST,
+    CAP_TIMESERIES_WRITE,
     PlatformContext,
     capability_granted,
 )
@@ -234,6 +236,49 @@ class _FakeTelegraf:
         return {"ok": True, "restarted": force}
 
 
+class _FakeTimeseries:
+    def __init__(self, fake: "FakePlatformContext") -> None:
+        self._fake = fake
+
+    async def write(
+        self, lines: Union[str, Iterable[str]], precision: str = "s"
+    ) -> int:
+        batch = lines.splitlines() if isinstance(lines, str) else list(lines)
+        batch = [ln for ln in batch if ln]
+        self._fake._enter(
+            CAP_TIMESERIES_WRITE, {"lines": len(batch), "precision": precision}
+        )
+        self._fake.timeseries_lines.extend(batch)
+        return len(batch)
+
+    async def latest(
+        self,
+        measurement: str,
+        tag_key: str,
+        tag_value: str,
+        fields: Optional[Iterable[str]] = None,
+    ) -> Union[None, str, Dict[str, Any]]:
+        wanted = None if fields is None else list(fields)
+        self._fake._enter(
+            CAP_TIMESERIES_LATEST,
+            {
+                "measurement": measurement,
+                "tag_key": tag_key,
+                "tag_value": tag_value,
+                "fields": wanted,
+            },
+        )
+        point = self._fake.timeseries_latest.get((measurement, tag_key, tag_value))
+        if point is None:
+            return None
+        if isinstance(point, str):
+            point = {"time": point, "fields": {}}
+        if wanted is None:
+            return cast(Optional[str], point.get("time"))
+        values = point.get("fields") or {}
+        return {"time": point.get("time"), "fields": {f: values.get(f) for f in wanted}}
+
+
 class FakePlatformContext:
     """An in-memory :class:`~minder_plugin_sdk.context.PlatformContext` for
     plugin unit tests: no platform needed.
@@ -252,9 +297,13 @@ class FakePlatformContext:
       unknown target raises ``CapabilityInvalid``.
     * ``telegraf_validator``: optional callable run on each managed region; raise
       ``CapabilityInvalid`` from it to simulate the platform rejecting it.
+    * ``timeseries_latest``: ``{(measurement, tag_key, tag_value): point}`` for
+      ``ctx.timeseries.latest``, where a point is an ISO timestamp or
+      ``{"time": ..., "fields": {...}}``; an unknown series returns ``None``.
 
     Every call (allowed or not) is appended to ``calls``. Side effects are kept
-    in ``indexed`` (documents, with content), ``telegraf_region`` and ``telegraf_reloads``.
+    in ``indexed`` (documents, with content), ``telegraf_region``,
+    ``telegraf_reloads`` and ``timeseries_lines`` (every line-protocol line written).
 
         ctx = FakePlatformContext(secrets={"API_TOKEN": "t"}, grants={"secrets.read"})
         await run_lifecycle(MyPlugin(), ctx=ctx)
@@ -269,6 +318,9 @@ class FakePlatformContext:
         unavailable: Iterable[str] = (),
         invoke_results: Optional[Mapping[Tuple[str, str], InvokeHandler]] = None,
         telegraf_validator: Optional[Callable[[str], None]] = None,
+        timeseries_latest: Optional[
+            Mapping[Tuple[str, str, str], Union[str, Dict[str, Any]]]
+        ] = None,
     ) -> None:
         self.secrets_store: Dict[str, str] = dict(secrets or {})
         self.grants: Optional[Set[str]] = None if grants is None else set(grants)
@@ -282,10 +334,15 @@ class FakePlatformContext:
         self.indexed: List[Dict[str, Any]] = []
         self.telegraf_region: Optional[str] = None
         self.telegraf_reloads: List[bool] = []
+        self.timeseries_latest: Dict[
+            Tuple[str, str, str], Union[str, Dict[str, Any]]
+        ] = dict(timeseries_latest or {})
+        self.timeseries_lines: List[str] = []
         self.secrets = _FakeSecrets(self)
         self.plugins = _FakePlugins(self)
         self.documents = _FakeDocuments(self)
         self.telegraf = _FakeTelegraf(self)
+        self.timeseries = _FakeTimeseries(self)
 
     @classmethod
     def for_plugin(
@@ -301,7 +358,9 @@ class FakePlatformContext:
         * ``plugins.invoke`` when ``dependencies`` (your
           ``PluginMetadata.dependencies``) is non-empty;
         * ``documents.index`` when ``REQUIRES`` lists the ``rag`` bundle;
-        * ``<name>.*`` for each name in ``MANAGES``.
+        * ``<name>.*`` for each name in ``MANAGES``;
+        * ``timeseries.*`` when ``TIMESERIES`` is declared (the platform also
+          limits writes to the declared measurements; this fake does not).
 
         Other keyword arguments are passed to the constructor."""
         grants = {CAP_SECRETS_READ}
@@ -312,6 +371,8 @@ class FakePlatformContext:
             grants.add(CAP_DOCUMENTS_INDEX)
         for name in getattr(plugin, "MANAGES", None) or []:
             grants.add(f"{name}.*")
+        if getattr(plugin, "TIMESERIES", None) is not None:
+            grants.add("timeseries.*")
         return cls(grants=grants, **kwargs)
 
     def has(self, capability: str) -> bool:
