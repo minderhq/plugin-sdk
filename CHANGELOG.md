@@ -52,6 +52,40 @@ of process, where plugin code holds no platform credentials.
 - Rules for plugin authors: return JSON-serialisable results, and don't share
   memory between plugins.
 
+### Remote (T4) plugins
+New optional extra `serve` (starlette, uvicorn, cryptography, httpx). The base
+package stays dependency-free, because these packages are imported only when
+used.
+- `t4` signs and verifies one RFC 9421 HTTP Message Signatures profile, used in
+  both directions.
+  - The profile is Ed25519 over `@method`, `@authority`, `@path`, `@query`,
+    `content-digest` and, when present, `authorization`. The parameters are
+    `created`, `nonce`, `keyid` (the RFC 7638 thumbprint) and `alg`. Bodies
+    get an RFC 9530 `Content-Digest`.
+  - A signature is fresh while `now - created <= 300` and
+    `created - now <= 10`.
+  - Nonce replay goes through a pluggable `NonceCache`, which expires entries
+    at the wall-clock time `created + 300`.
+  - `MinderKeySet` fetches and caches Minder's
+    `/.well-known/minder/plugin-jwks.json`, refetching on an unknown `keyid`
+    with a rate limit.
+  - `InstallationKey` signs callbacks.
+- `t4_server.create_app` and `minder-plugin serve` wrap a plugin as an ASGI
+  app.
+  - It serves a signed `POST /minder/v1/invoke` (envelope `kind`, `target`,
+    `kwargs`, `deadline_ms`) and `GET /minder/v1/health`.
+  - It checks `@authority` against the configured `--public-authority`.
+  - Errors are JSON with stable codes and no tracebacks.
+  - `current_invocation()` exposes the invocation.
+- `t4_callbacks.CallbackPlatformContext` is `self.ctx` for remote plugins.
+  - Each call is a `POST <callback_base>/v1/plugin-callbacks/<capability>`,
+    sent with the grant as bearer and signed with the installation key.
+  - Errors map to `CapabilityDenied`, `CapabilityInvalid` and
+    `CapabilityUnavailable`.
+  - `telegraf.*` is denied locally.
+- `examples/remote_echo` and the guide
+  `docs/t4/verifying-minder-signatures.md`, for authors in other languages.
+
 ### Platform time-series capability
 - `context`: `ctx.timeseries` (`TimeseriesAPI`) with `write(lines,
   precision="s")` and `latest(measurement, tag_key, tag_value, fields=None)`,

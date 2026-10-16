@@ -288,6 +288,57 @@ self-contained plugin that uses **every** part of the contract: the full
 lifecycle, `CONFIG_SCHEMA` + `apply_config`, `ACTIONS` + `READ_ONLY_ACTIONS`, and
 an `AI_TOOLS` function-calling tool. Depends only on `httpx` + this SDK.
 
+## Remote plugins (T4): `minder-plugin serve`
+
+A remote (T4) plugin runs on **your** infrastructure, and Minder calls it over
+HTTPS. The plugin code is the same `PluginBase` code: `minder-plugin serve`
+wraps it as an ASGI app that verifies every call and turns `self.ctx` into
+signed callbacks to Minder.
+
+```bash
+pip install 'minder-plugin-sdk[serve]'
+export MINDER_PLUGIN_INSTALLATION_KEY=...   # base64 of the installation's 32-byte Ed25519 seed
+minder-plugin serve my_plugin.py --minder-url https://minder.example \
+    --public-authority plugin.example --port 8080
+```
+
+What the server does:
+
+- **Inbound.** It serves `POST /minder/v1/invoke`. Each request must carry
+  Minder's RFC 9421 Ed25519 signature over `@method`, `@authority`, `@path`,
+  `@query` and `content-digest`.
+  - The signing keys come from
+    `<minder>/.well-known/minder/plugin-jwks.json`. They are cached, and
+    refetched when an unknown `keyid` appears.
+  - `--public-authority` is your endpoint's host. A request Minder signed for
+    another plugin fails there.
+  - A signature older than 300 s, a replayed nonce or a body that doesn't
+    match its digest gets a `401` with a stable `error.reason`.
+- **Dispatch.** The envelope's `kind` (`tool` or `action`), `target` and
+  `kwargs` run the matching `AI_TOOLS` entry or declared `ACTIONS` method,
+  bounded by `deadline_ms`. Answers are JSON. Errors map to stable codes
+  (`unknown_target`, `invalid_arguments`, `capability_denied`,
+  `deadline_exceeded`, ...) and never include a traceback.
+- **Callbacks.** While a call runs, `self.ctx` is a
+  `t4_callbacks.CallbackPlatformContext`. Each `ctx` call becomes
+  `POST <callback_base>/v1/plugin-callbacks/<capability>`, sent with
+  `Authorization: Bearer <grant>` and signed with the installation key.
+  Minder takes the tenant and owner from the grant. `ctx.telegraf.*` is not
+  available to remote plugins.
+
+The server also has these settings:
+
+- `current_invocation()` gives the pseudonymous `tenant_ref` and `owner_ref`.
+- `--path-prefix` is for a reverse proxy that mounts the app below `/`.
+- Several replicas need a shared `t4.NonceCache`.
+- Terminate TLS in front of the server.
+
+Run the [`examples/remote_echo`](examples/remote_echo/) example to try it.
+Authors in other languages should follow
+[Verifying Minder's signature](docs/t4/verifying-minder-signatures.md), which
+covers the exact signature base, an `openssl` and a Python walk-through, and
+the shared test vectors.
+
 ## Manifest plugins (data-ingestion)
 
 A separate, declarative mechanism for `webhook → store-vector` ingestion — a YAML
@@ -333,6 +384,7 @@ The SDK is more than the contract — it ships the batteries a plugin author nee
 | `check_plugin(p)` / `run_lifecycle(p, ctx=None)` | Test helpers: contract violations as a list; drive the full lifecycle in a test (optionally with a bound context). |
 | `FakePlatformContext` | In-memory platform context (contract v2) for unit tests: secrets, grants/denials, recorded calls. |
 | `safe_http.safe_request` / `check_url` | SSRF-guarded outbound HTTP (needs `httpx`). |
+| `t4` / `t4_server` / `t4_callbacks` | Remote (T4) plugins: verify Minder's RFC 9421 signatures, `minder-plugin serve`, the signed grant-callback `ctx` (the `serve` extra). |
 | `resolve_config_schema` / `resolve_effective_config` / `validate_config` | Compile config to JSON Schema, resolve default→env→persisted, validate values. |
 | `build_tool_definitions` / `ai_tool_errors` | Turn `AI_TOOLS` into OpenAI/Ollama tool defs; validate they map to actions. |
 | `load_manifest` / `validate_manifest` | Parse + validate a `webhook → store-vector` manifest (bundled JSON Schema). |
@@ -344,6 +396,7 @@ The SDK is more than the contract — it ships the batteries a plugin author nee
 minder-plugin scaffold my-plugin        # generate a working skeleton
 minder-plugin validate my_plugin.py     # (or a manifest.yaml) → contract check
 minder-plugin inspect  my_plugin.py     # capabilities + compiled config/UI schema + tools
+minder-plugin serve    my_plugin.py --minder-url https://...   # run as a remote (T4) plugin
 ```
 
 ### Examples
@@ -353,12 +406,13 @@ minder-plugin inspect  my_plugin.py     # capabilities + compiled config/UI sche
 - [`ai_tool_plugin.py`](examples/ai_tool_plugin.py) — an AI-tool-only plugin.
 - [`discord_manifest.yaml`](examples/discord_manifest.yaml) — a manifest plugin.
 - [`webhook_manifest.yaml`](examples/webhook_manifest.yaml) — a manifest + webhook plugin (the installable third-party shape).
+- [`remote_echo/`](examples/remote_echo/) — a remote (T4) plugin with one chat tool, run by `minder-plugin serve`.
 - [`webhook_plugin.py`](examples/webhook_plugin.py) — a `handle_webhook` handler stub (request/response contract).
 
 ## Develop
 
 ```bash
-pip install -e ".[dev,examples]"
+pip install -e ".[dev,examples]"   # dev includes the serve extra's packages
 pytest && black --check src tests examples && flake8 src tests examples && mypy src
 ```
 
