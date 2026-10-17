@@ -70,6 +70,19 @@ used.
     `/.well-known/minder/plugin-jwks.json`, refetching on an unknown `keyid`
     with a rate limit.
   - `InstallationKey` signs callbacks.
+  - `normalize_authority` refuses non-ASCII input before lowercasing and an
+    empty label anywhere in the host (`a..b`, `.a.b`, `a.b..`); one trailing
+    dot is still dropped.
+  - `require_ascii_origin` returns the canonical `scheme://authority` of an
+    origin whose host is already ASCII: LDH labels, well-formed IDNA
+    A-labels (`xn--`), canonical dotted-decimal IPv4 or an IPv6 literal. It
+    refuses a Unicode host, `_` or `%` in the host, a `0x` hexadecimal label
+    anywhere (and any host that ends in a number but isn't canonical IPv4),
+    and an `xn--` label that is malformed or fails a conservative subset of
+    the IDNA2008 rules (no leading combining mark, no default-ignorable or
+    filler code points, no mixed bidi direction, scripts among Latin,
+    Cyrillic and Greek, or digit sets). It is not full IDNA2008. It is for
+    pinning an origin once.
 - `t4_server.create_app` and `minder-plugin serve` wrap a plugin as an ASGI
   app.
   - It serves a signed `POST /minder/v1/invoke` (envelope `kind`, `target`,

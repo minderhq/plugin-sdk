@@ -36,8 +36,9 @@ The component values are as follows:
   1-65535. Refuse anything else. Refuse non-ASCII input BEFORE lowercasing,
   because some characters lowercase to ASCII (the Kelvin sign U+212A
   becomes `k`). Drop exactly one trailing dot of a fully qualified name
-  (`example.com.` becomes `example.com`), and refuse an empty label
-  (`example.com..`, `.`).
+  (`example.com.` becomes `example.com`), and refuse an empty label anywhere
+  in the host (`a..b`, `.a.b`, `example.com..`, `.`). An IPv6 literal has no
+  labels.
 - `@path` is the path Minder addressed, e.g. `/minder/v1/invoke`. If a reverse
   proxy strips a prefix, use the external path. The simplest strict choice is
   the route constant you serve, not the raw path you received, so an alias
