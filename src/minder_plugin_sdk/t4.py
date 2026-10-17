@@ -569,16 +569,64 @@ def authority_from_origin(origin: str) -> str:
 # One LDH label of an ASCII host name (RFC 1123): 1-63 of [a-z0-9-], no
 # leading or trailing hyphen. Checked after lowercasing.
 _LDH_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+# A label a URL parser may read as a number (WHATWG IPv4 parser), and a
+# hexadecimal one (refused anywhere in the host).
+_NUMERIC_LABEL = re.compile(r"^(0[xX][0-9a-fA-F]*|[0-9]+)\Z")
+_HEX_LABEL = re.compile(r"^0[xX][0-9a-fA-F]*\Z")
 # What a U-label may hold besides "-": lowercase and other letters, marks and
 # decimal digits (roughly IDNA2008 PVALID; no symbols, punctuation, spaces,
 # controls or uppercase).
 _U_LABEL_CATEGORIES = frozenset({"Ll", "Lm", "Lo", "Mn", "Mc", "Nd"})
 
 
+# Default_Ignorable and filler code points a U-label must not hold (some are
+# letters or marks, so the category check alone lets them through).
+_U_LABEL_IGNORABLE = frozenset(
+    [0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x3164, 0xFFA0]
+    + list(range(0x180B, 0x1810))
+    + list(range(0x200B, 0x2010))
+    + list(range(0x202A, 0x202F))
+    + list(range(0x2060, 0x2070))
+    + list(range(0xFE00, 0xFE10))
+)
+# Scripts a U-label must not mix (the classic look-alike sets), by the first
+# word of each letter's Unicode name.
+_U_LABEL_CONFUSABLE_SCRIPTS = frozenset({"LATIN", "CYRILLIC", "GREEK"})
+
+
+def _u_label_is_safe(u_label: str) -> bool:
+    """A conservative subset of the IDNA2008 rules (RFC 5891, 5892, 5893),
+    stdlib only and NOT full IDNA2008: the label is NFC; holds only letters,
+    marks, decimal digits and ``-``; doesn't start with a combining mark;
+    holds no Default_Ignorable or filler code point; doesn't mix
+    right-to-left (R, AL) with left-to-right (L) characters; doesn't mix
+    Latin, Cyrillic and Greek letters; and doesn't mix digit sets."""
+    if not u_label or unicodedata.category(u_label[0]).startswith("M"):
+        return False
+    if not unicodedata.is_normalized("NFC", u_label):
+        return False
+    scripts: set[str] = set()
+    digit_zeros: set[int] = set()
+    bidi: set[str] = set()
+    for c in u_label:
+        category = unicodedata.category(c)
+        if c != "-" and category not in _U_LABEL_CATEGORIES:
+            return False
+        if ord(c) in _U_LABEL_IGNORABLE:
+            return False
+        bidi.add(unicodedata.bidirectional(c))
+        if category.startswith("L"):
+            scripts.add(unicodedata.name(c, "").partition(" ")[0])
+        elif category == "Nd":
+            digit_zeros.add(ord(c) - unicodedata.decimal(c))
+    if bidi & {"R", "AL"} and "L" in bidi:
+        return False
+    return len(scripts & _U_LABEL_CONFUSABLE_SCRIPTS) <= 1 and len(digit_zeros) <= 1
+
+
 def _is_a_label(label: str) -> bool:
-    """``xn--`` plus Punycode that decodes to a non-ASCII, NFC U-label of
-    letters, marks, digits and ``-``, and encodes back to the same label.
-    Full IDNA2008 code point, context and bidi rules are not checked."""
+    """``xn--`` plus Punycode that decodes to a non-ASCII U-label that passes
+    :func:`_u_label_is_safe`, and encodes back to the same label."""
     try:
         u_label = label[4:].encode("ascii").decode("punycode")
     except UnicodeError:
@@ -586,10 +634,7 @@ def _is_a_label(label: str) -> bool:
     return (
         not u_label.isascii()
         and u_label.encode("punycode").decode("ascii") == label[4:]
-        and unicodedata.is_normalized("NFC", u_label)
-        and all(
-            c == "-" or unicodedata.category(c) in _U_LABEL_CATEGORIES for c in u_label
-        )
+        and _u_label_is_safe(u_label)
     )
 
 
@@ -608,13 +653,19 @@ def _check_ascii_host(host: str) -> None:
     for label in labels:
         if not _LDH_LABEL.match(label):
             raise ValueError("origin host label is not letters, digits and hyphens")
+        if _HEX_LABEL.match(label):
+            raise ValueError("origin host has a hexadecimal label")
         if label[2:4] == "--" and not (label.startswith("xn--") and _is_a_label(label)):
             raise ValueError("origin host label is not a valid IDNA A-label")
-    if labels[-1].isdigit():
+    # WHATWG "ends in a number": a URL parser reads such a host as IPv4, so it
+    # must already be the canonical dotted-decimal form.
+    if _NUMERIC_LABEL.match(labels[-1]):
         try:
-            ipaddress.IPv4Address(host)
+            canonical = str(ipaddress.IPv4Address(host))
         except ValueError as e:
             raise ValueError("origin host is not a valid IPv4 address") from e
+        if canonical != host:
+            raise ValueError("origin host is not a valid IPv4 address")
 
 
 def require_ascii_origin(origin: str) -> str:
@@ -625,14 +676,18 @@ def require_ascii_origin(origin: str) -> str:
     whole origin must be ASCII, and the host must be one of:
 
     - a bracketed IPv6 literal;
-    - a dotted-decimal IPv4 address (a numeric last label must be one);
+    - a canonical dotted-decimal IPv4 address (a host whose last label is a
+      number, decimal or ``0x`` hexadecimal, must be one: the WHATWG URL
+      parser reads it as IPv4);
     - a name of at most 253 characters whose labels are LDH (``[a-z0-9-]``,
       1-63 characters, no leading or trailing hyphen), where ``??--`` is
       reserved for well-formed IDNA A-labels (``xn--`` Punycode that
-      round-trips).
+      round-trips to a U-label that passes a conservative subset of the
+      IDNA2008 rules, see :func:`_u_label_is_safe`).
 
     Anything else raises ValueError: a Unicode (U-label) host, a
-    percent-encoded or ``_`` host, a malformed ``xn--`` label. The caller
+    percent-encoded or ``_`` host, a ``0x`` hexadecimal label anywhere, a
+    malformed or unsafe ``xn--`` label. The caller
     converts a Unicode name to A-labels, and shows both forms to the admin,
     before pinning, so the pinned string is never mapped again. Case, one
     trailing dot and the default port are normalised as in

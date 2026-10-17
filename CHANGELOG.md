@@ -75,8 +75,13 @@ used.
     dot is still dropped.
   - `require_ascii_origin` returns the canonical `scheme://authority` of an
     origin whose host is already ASCII: LDH labels, well-formed IDNA
-    A-labels (`xn--`), dotted-decimal IPv4 or an IPv6 literal. It refuses a
-    Unicode host, `_` or `%` in the host and a malformed `xn--` label, for
+    A-labels (`xn--`), canonical dotted-decimal IPv4 or an IPv6 literal. It
+    refuses a Unicode host, `_` or `%` in the host, a `0x` hexadecimal label
+    anywhere (and any host that ends in a number but isn't canonical IPv4),
+    and an `xn--` label that is malformed or fails a conservative subset of
+    the IDNA2008 rules (no leading combining mark, no default-ignorable or
+    filler code points, no mixed bidi direction, scripts among Latin,
+    Cyrillic and Greek, or digit sets). It is not full IDNA2008. It is for
     pinning an origin once.
 - `t4_server.create_app` and `minder-plugin serve` wrap a plugin as an ASGI
   app.

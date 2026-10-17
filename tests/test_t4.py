@@ -287,6 +287,10 @@ def test_non_string_authority_is_refused():
         ("https://XN--Bcher-KVA.example", "https://xn--bcher-kva.example"),
         ("https://xn--strae-oqa.de", "https://xn--strae-oqa.de"),
         ("https://a-b.1x.example", "https://a-b.1x.example"),
+        ("https://1.2.3.4", "https://1.2.3.4"),
+        ("https://0xford.example", "https://0xford.example"),  # not hex
+        ("https://xn--mgbc.example", "https://xn--mgbc.example"),  # Arabic only
+        ("https://xn--nxasmq6b.example", "https://xn--nxasmq6b.example"),  # Greek
         ("https://" + "a" * 63 + ".example", "https://" + "a" * 63 + ".example"),
     ],
 )
@@ -334,6 +338,24 @@ def test_require_ascii_origin(origin, expected):
         # an invalid IPv6 literal
         "https://[1:2:3]",
         "https://[::1::2]",
+        # hexadecimal labels (WHATWG "ends in a number"; 0x... anywhere)
+        "https://0x7f000001",
+        "https://0x7f.0x1",
+        "https://a.0x10",
+        "https://0X7F.1",
+        "https://foo.0x",
+        "https://0x10.example",
+        # A-labels outside the conservative IDNA2008 subset
+        "https://xn--vhk.example",  # U+3164 HANGUL FILLER
+        "https://xn--psd.example",  # U+1160 HANGUL JUNGSEONG FILLER
+        "https://xn--a-egb.example",  # U+034F COMBINING GRAPHEME JOINER
+        "https://xn--tda8860k.example",  # U+FE0F VARIATION SELECTOR-16
+        "https://xn--a-ubb.example",  # starts with a combining mark
+        "https://xn--pple-43d.example",  # Cyrillic a + Latin pple
+        "https://xn--mxa7w.example",  # Cyrillic + Greek
+        "https://xn--a-zhc.example",  # Hebrew (R) + Latin (L)
+        "https://xn--a1-cyd.example",  # ASCII + Arabic-Indic digits
+        "https://xn--e4b0x.example",  # Devanagari + Bengali digits
         None,
     ],
 )
