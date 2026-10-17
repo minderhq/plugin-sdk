@@ -14,7 +14,10 @@ Signatures**:
 - ``@authority`` is the host the signer addressed, lowercased, with the
   scheme's default port dropped (RFC 9421 section 2.2.3). A verifier compares
   it with ITS OWN public authority, never a value the request supplies, so a
-  request signed for another plugin can't be replayed against yours;
+  request signed for another plugin can't be replayed against yours. A
+  non-ASCII authority is refused before lowercasing, and so is an empty host
+  label; :func:`require_ascii_origin` is the stricter check for pinning an
+  origin whose host must already be ASCII (IDNA A-labels);
 - ``@query`` is ``?`` plus the raw query, so ``?`` when there is none (RFC
   9421 section 2.2.7);
 - parameters ``created``, ``nonce``, ``keyid``, ``alg``, in that order;
@@ -56,6 +59,7 @@ import re
 import secrets
 import threading
 import time
+import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import (
@@ -117,6 +121,7 @@ __all__ = [
     "origin_of",
     "normalize_authority",
     "authority_from_origin",
+    "require_ascii_origin",
     "query_component",
 ]
 
@@ -523,7 +528,7 @@ def normalize_authority(authority: str, scheme: str = "https") -> str:
     bracketed IPv6 literal without a zone id, and the port is 1-65535.
     Raises ValueError for anything else (userinfo, a path, whitespace, a
     non-ASCII host, ``host:`` with an empty port, port 0, an empty label
-    such as ``example.com..`` or ``.``...). For a URL use
+    such as ``a..b``, ``.a.b``, ``example.com..`` or ``.``...). For a URL use
     :func:`authority_from_origin`."""
     scheme = scheme.lower()
     if scheme not in _DEFAULT_PORTS:
@@ -538,9 +543,10 @@ def normalize_authority(authority: str, scheme: str = "https") -> str:
     if not m:
         raise ValueError("authority must be host[:port]")
     host, port = m.group(1), m.group(2)
-    if not host.startswith("[") and host.endswith("."):
-        host = host[:-1]
-        if not host or host.endswith("."):
+    if not host.startswith("["):
+        if host.endswith("."):
+            host = host[:-1]
+        if "" in host.split("."):
             raise ValueError("authority host has an empty label")
     if port is not None and not 0 < int(port) < 65536:
         raise ValueError("authority port out of range")
@@ -558,6 +564,88 @@ def authority_from_origin(origin: str) -> str:
     if parts.path not in ("", "/") or parts.query or parts.fragment:
         raise ValueError("origin must not carry a path, query or fragment")
     return normalize_authority(parts.netloc, parts.scheme)
+
+
+# One LDH label of an ASCII host name (RFC 1123): 1-63 of [a-z0-9-], no
+# leading or trailing hyphen. Checked after lowercasing.
+_LDH_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+# What a U-label may hold besides "-": lowercase and other letters, marks and
+# decimal digits (roughly IDNA2008 PVALID; no symbols, punctuation, spaces,
+# controls or uppercase).
+_U_LABEL_CATEGORIES = frozenset({"Ll", "Lm", "Lo", "Mn", "Mc", "Nd"})
+
+
+def _is_a_label(label: str) -> bool:
+    """``xn--`` plus Punycode that decodes to a non-ASCII, NFC U-label of
+    letters, marks, digits and ``-``, and encodes back to the same label.
+    Full IDNA2008 code point, context and bidi rules are not checked."""
+    try:
+        u_label = label[4:].encode("ascii").decode("punycode")
+    except UnicodeError:
+        return False
+    return (
+        not u_label.isascii()
+        and u_label.encode("punycode").decode("ascii") == label[4:]
+        and unicodedata.is_normalized("NFC", u_label)
+        and all(
+            c == "-" or unicodedata.category(c) in _U_LABEL_CATEGORIES for c in u_label
+        )
+    )
+
+
+def _check_ascii_host(host: str) -> None:
+    """Raise ValueError unless ``host`` (normalised) is an IPv6 literal, a
+    dotted-decimal IPv4 address, or a name of LDH labels and IDNA A-labels."""
+    if host.startswith("["):
+        try:
+            ipaddress.IPv6Address(host[1:-1])
+        except ValueError as e:
+            raise ValueError("origin host is not a valid IPv6 literal") from e
+        return
+    if len(host) > 253:
+        raise ValueError("origin host is longer than 253 characters")
+    labels = host.split(".")
+    for label in labels:
+        if not _LDH_LABEL.match(label):
+            raise ValueError("origin host label is not letters, digits and hyphens")
+        if label[2:4] == "--" and not (label.startswith("xn--") and _is_a_label(label)):
+            raise ValueError("origin host label is not a valid IDNA A-label")
+    if labels[-1].isdigit():
+        try:
+            ipaddress.IPv4Address(host)
+        except ValueError as e:
+            raise ValueError("origin host is not a valid IPv4 address") from e
+
+
+def require_ascii_origin(origin: str) -> str:
+    """The canonical ``scheme://authority`` of an origin whose host is
+    already in ASCII form, for pinning a T4 origin at install time.
+
+    Stricter than :func:`authority_from_origin`, which it applies first. The
+    whole origin must be ASCII, and the host must be one of:
+
+    - a bracketed IPv6 literal;
+    - a dotted-decimal IPv4 address (a numeric last label must be one);
+    - a name of at most 253 characters whose labels are LDH (``[a-z0-9-]``,
+      1-63 characters, no leading or trailing hyphen), where ``??--`` is
+      reserved for well-formed IDNA A-labels (``xn--`` Punycode that
+      round-trips).
+
+    Anything else raises ValueError: a Unicode (U-label) host, a
+    percent-encoded or ``_`` host, a malformed ``xn--`` label. The caller
+    converts a Unicode name to A-labels, and shows both forms to the admin,
+    before pinning, so the pinned string is never mapped again. Case, one
+    trailing dot and the default port are normalised as in
+    :func:`normalize_authority`."""
+    if not isinstance(origin, str) or not origin.isascii():
+        raise ValueError("origin must be ASCII (an IDNA A-label host)")
+    authority = authority_from_origin(origin)
+    if authority.startswith("["):
+        host = authority[: authority.index("]") + 1]
+    else:
+        host = authority.partition(":")[0]
+    _check_ascii_host(host)
+    return f"{urlsplit(origin.strip()).scheme.lower()}://{authority}"
 
 
 def query_component(query: str) -> str:

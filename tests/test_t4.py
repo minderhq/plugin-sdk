@@ -200,6 +200,13 @@ def test_authority_normalisation(value, scheme, expected):
         "host:1:2",
         "example.com..",
         ".",
+        # an empty label anywhere in the host
+        "a..b",
+        ".a.b",
+        "a.b..",
+        "..",
+        ".:443",
+        "a..b:8443",
         # port 0, a non-ASCII host, IPv6 zone ids, a URL
         "host:0",
         "plügin.example",
@@ -250,6 +257,89 @@ def test_non_ascii_is_refused_before_lowercasing(value):
         t4.normalize_authority(value)
     with pytest.raises(ValueError):
         t4.authority_from_origin(f"https://{value}")
+
+
+def test_ipv6_literals_are_not_split_into_labels():
+    assert t4.normalize_authority("[::1]") == "[::1]"
+    assert t4.normalize_authority("[2001:db8::]:8443") == "[2001:db8::]:8443"
+    assert t4.normalize_authority("[::ffff:10.0.0.5]") == "[::ffff:10.0.0.5]"
+
+
+def test_non_string_authority_is_refused():
+    with pytest.raises(ValueError):
+        t4.normalize_authority(None)  # type: ignore[arg-type]
+
+
+# ── strict origins (install-time pinning) ────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "origin, expected",
+    [
+        ("https://plugin.example.com", "https://plugin.example.com"),
+        ("HTTPS://Plugin.Example.COM:443/", "https://plugin.example.com"),
+        ("https://plugin.example.com.:8443", "https://plugin.example.com:8443"),
+        ("http://localhost:8080", "http://localhost:8080"),
+        ("https://10.0.0.5", "https://10.0.0.5"),
+        ("https://[2001:DB8::1]:443", "https://[2001:db8::1]"),
+        ("https://[::ffff:10.0.0.5]:8443", "https://[::ffff:10.0.0.5]:8443"),
+        ("https://xn--bcher-kva.example", "https://xn--bcher-kva.example"),
+        ("https://XN--Bcher-KVA.example", "https://xn--bcher-kva.example"),
+        ("https://xn--strae-oqa.de", "https://xn--strae-oqa.de"),
+        ("https://a-b.1x.example", "https://a-b.1x.example"),
+        ("https://" + "a" * 63 + ".example", "https://" + "a" * 63 + ".example"),
+    ],
+)
+def test_require_ascii_origin(origin, expected):
+    assert t4.require_ascii_origin(origin) == expected
+    # What gets pinned is a fixed point, and signs for the same authority.
+    assert t4.require_ascii_origin(expected) == expected
+    assert t4.authority_from_origin(expected) == t4.authority_from_origin(origin)
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        # everything authority_from_origin refuses
+        "ftp://host",
+        "https://host/path",
+        "https://a..b",
+        # not ASCII anywhere
+        "https://bücher.example",
+        "https://plugin-K.example.com",
+        "https://İnstance.example.com",
+        "https://host/é",
+        # not LDH
+        "https://under_score.example",
+        "https://pct%41.example",
+        "https://-lead.example",
+        "https://trail-.example",
+        "https://" + "a" * 64 + ".example",
+        "https://" + ".".join(["a" * 63] * 4),
+        "https://a~b.example",
+        # ??-- is reserved for A-labels
+        "https://ab--cd.example",
+        "https://xn--.example",
+        "https://xn--abc-.example",
+        "https://xn--ascii-.example",  # ASCII-only Punycode
+        "https://xn--zz-zz.example",  # not Punycode
+        "https://xn--ls8h.example",  # a symbol (U+1F4A9), not a letter
+        "https://xn--a-xbb.example",  # not NFC (a + U+0301)
+        "https://xn--wca.example",  # uppercase U+00DC
+        # a numeric last label must be IPv4
+        "https://1.2.3.999",
+        "https://010.0.0.1",
+        "https://example.123",
+        "https://1.2.3",
+        # an invalid IPv6 literal
+        "https://[1:2:3]",
+        "https://[::1::2]",
+        None,
+    ],
+)
+def test_require_ascii_origin_refuses(origin):
+    with pytest.raises(ValueError):
+        t4.require_ascii_origin(origin)
 
 
 def test_scheme_must_be_http_or_https():
