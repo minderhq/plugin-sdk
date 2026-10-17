@@ -1,0 +1,129 @@
+{
+  "description": "Minder T4 remote-plugin RFC 9421 profile test vectors. Ed25519 (alg=\"ed25519\"), label sig1; covered components @method, @authority, @path, @query, content-digest, then authorization when the request has one. @authority is the origin's host[:port], lowercased, default port dropped (RFC 9421 2.2.3); the verifier uses its own configured authority, never the Host header. @query is ? plus the query, ? alone when there is none (2.2.7). Parameters created, nonce, keyid, alg in that order; Content-Digest sha-256 (RFC 9530) over the UTF-8 body. The key is RFC 9421 Appendix B.1.4 test-key-ed25519, a published test key. Verify each case with now = params.created and authority = request.authority.",
+  "profile": {
+    "label": "sig1",
+    "alg": "ed25519",
+    "components": [
+      "@method",
+      "@authority",
+      "@path",
+      "@query",
+      "content-digest",
+      "authorization (if present)"
+    ],
+    "params": [
+      "created",
+      "nonce",
+      "keyid",
+      "alg"
+    ],
+    "max_age_seconds": 300,
+    "future_skew_seconds": 10,
+    "nonce_retention": "until created + max_age + future_skew (wall time)"
+  },
+  "key": {
+    "source": "RFC 9421 Appendix B.1.4 test-key-ed25519",
+    "seed_b64": "n4Ni+HpISpVObnQMW0wOhCKROaIKqKtW/2ZYb2p9KcU=",
+    "public_jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs",
+      "kid": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U",
+      "use": "sig"
+    },
+    "keyid": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U"
+  },
+  "cases": [
+    {
+      "name": "invoke",
+      "description": "Minder -> plugin: POST <origin>/minder/v1/invoke, no Authorization. The pinned origin's authority is lowercased and its default port dropped.",
+      "request": {
+        "method": "POST",
+        "origin": "https://Plugin.Example.com:443",
+        "authority": "plugin.example.com",
+        "target": "/minder/v1/invoke",
+        "headers": {
+          "Host": "plugin.example.com",
+          "Content-Type": "application/json",
+          "Content-Digest": "sha-256=:vXU3258nc/V4LFvmMiy44eqLtInKusv5yay+HB6A850=:",
+          "Signature-Input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1760000000;nonce=\"t4-vector-nonce-0001\";keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\"",
+          "Signature": "sig1=:be6M1nip2/cswBRK5XsfqdQZbJDTHb2j7+aH5GNRpqqae59FugG7gKlhFmRr4/WJLd1mYIVTvQmo8j+oyC50CA==:"
+        },
+        "body": "{\"contract\":\"minder.t4/v1\",\"invocation_id\":\"inv-0001\",\"kind\":\"action\",\"target\":\"echo\",\"kwargs\":{\"text\":\"hello\"}}"
+      },
+      "params": {
+        "created": 1760000000,
+        "nonce": "t4-vector-nonce-0001",
+        "keyid": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U",
+        "authorization": null
+      },
+      "expected": {
+        "content_digest": "sha-256=:vXU3258nc/V4LFvmMiy44eqLtInKusv5yay+HB6A850=:",
+        "signature_input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1760000000;nonce=\"t4-vector-nonce-0001\";keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\"",
+        "signature_base": "\"@method\": POST\n\"@authority\": plugin.example.com\n\"@path\": /minder/v1/invoke\n\"@query\": ?\n\"content-digest\": sha-256=:vXU3258nc/V4LFvmMiy44eqLtInKusv5yay+HB6A850=:\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1760000000;nonce=\"t4-vector-nonce-0001\";keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\"",
+        "signature": "sig1=:be6M1nip2/cswBRK5XsfqdQZbJDTHb2j7+aH5GNRpqqae59FugG7gKlhFmRr4/WJLd1mYIVTvQmo8j+oyC50CA==:"
+      }
+    },
+    {
+      "name": "callback-with-grant",
+      "description": "Plugin -> Minder callback: the grant bearer is covered.",
+      "request": {
+        "method": "POST",
+        "origin": "https://minder.example.com",
+        "authority": "minder.example.com",
+        "target": "/v1/plugin-callbacks/kv.get",
+        "headers": {
+          "Host": "minder.example.com",
+          "Content-Type": "application/json",
+          "Content-Digest": "sha-256=:kc+f/+/XsnR/OwmItzqFnEih92VI9HhZr1/FNio9Gn8=:",
+          "Signature-Input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"authorization\");created=1760000100;nonce=\"t4-vector-nonce-0002\";keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\"",
+          "Signature": "sig1=:5CW3ciSyvFKj2KweeambrFZGXv3ZoU3chJfaklb66knX7WxDW4VT9d5kiD2HkHxrk4LkVB2Qi9cbt/fPV3V5AQ==:",
+          "Authorization": "Bearer grant.opaque-token-0001"
+        },
+        "body": "{\"key\":\"greeting\"}"
+      },
+      "params": {
+        "created": 1760000100,
+        "nonce": "t4-vector-nonce-0002",
+        "keyid": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U",
+        "authorization": "Bearer grant.opaque-token-0001"
+      },
+      "expected": {
+        "content_digest": "sha-256=:kc+f/+/XsnR/OwmItzqFnEih92VI9HhZr1/FNio9Gn8=:",
+        "signature_input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"authorization\");created=1760000100;nonce=\"t4-vector-nonce-0002\";keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\"",
+        "signature_base": "\"@method\": POST\n\"@authority\": minder.example.com\n\"@path\": /v1/plugin-callbacks/kv.get\n\"@query\": ?\n\"content-digest\": sha-256=:kc+f/+/XsnR/OwmItzqFnEih92VI9HhZr1/FNio9Gn8=:\n\"authorization\": Bearer grant.opaque-token-0001\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"authorization\");created=1760000100;nonce=\"t4-vector-nonce-0002\";keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\"",
+        "signature": "sig1=:5CW3ciSyvFKj2KweeambrFZGXv3ZoU3chJfaklb66knX7WxDW4VT9d5kiD2HkHxrk4LkVB2Qi9cbt/fPV3V5AQ==:"
+      }
+    },
+    {
+      "name": "empty-body-port-query",
+      "description": "An empty body still carries the sha-256 of zero bytes; a non-default port stays in @authority and the query is covered as sent.",
+      "request": {
+        "method": "GET",
+        "origin": "https://plugin.example.com:8443",
+        "authority": "plugin.example.com:8443",
+        "target": "/minder/v1/health?probe=1&x=%20",
+        "headers": {
+          "Host": "plugin.example.com:8443",
+          "Content-Type": "application/json",
+          "Content-Digest": "sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:",
+          "Signature-Input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1760000200;nonce=\"t4-vector-nonce-0003\";keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\"",
+          "Signature": "sig1=:IMPWNaM4+sbcDnGE/aYr0GrgYftc8epKNuGvC8fROuwreLiqh8r4PWJUAC9CIuXM0K55hQ/pbFNAj7H2cODfBw==:"
+        },
+        "body": ""
+      },
+      "params": {
+        "created": 1760000200,
+        "nonce": "t4-vector-nonce-0003",
+        "keyid": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U",
+        "authorization": null
+      },
+      "expected": {
+        "content_digest": "sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:",
+        "signature_input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1760000200;nonce=\"t4-vector-nonce-0003\";keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\"",
+        "signature_base": "\"@method\": GET\n\"@authority\": plugin.example.com:8443\n\"@path\": /minder/v1/health\n\"@query\": ?probe=1&x=%20\n\"content-digest\": sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1760000200;nonce=\"t4-vector-nonce-0003\";keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\"",
+        "signature": "sig1=:IMPWNaM4+sbcDnGE/aYr0GrgYftc8epKNuGvC8fROuwreLiqh8r4PWJUAC9CIuXM0K55hQ/pbFNAj7H2cODfBw==:"
+      }
+    }
+  ]
+}

@@ -3,12 +3,14 @@
 minder-plugin validate path/to/plugin.py        # or a manifest.yaml
 minder-plugin inspect  path/to/plugin.py         # capabilities + config schema
 minder-plugin scaffold my-plugin [-o out.py]     # generate a skeleton
+minder-plugin serve    path/to/plugin.py --minder-url https://...  # run as T4
 """
 
 import argparse
 import importlib.util
 import inspect
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, List, Optional
@@ -142,6 +144,73 @@ def _cmd_scaffold(name: str, out: Optional[str]) -> int:
     return 0
 
 
+DEFAULT_KEY_ENV = "MINDER_PLUGIN_INSTALLATION_KEY"
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    minder_url = args.minder_url or os.environ.get("MINDER_URL")
+    if not minder_url:
+        print("FAIL --minder-url (or MINDER_URL) is required")
+        return 2
+    try:
+        import uvicorn
+
+        from .t4 import InstallationKey
+        from .t4_server import create_app
+    except ImportError:
+        print(
+            "FAIL serve needs the serve extra: pip install 'minder-plugin-sdk[serve]'"
+        )
+        return 2
+    key = None
+    seed = os.environ.get(args.installation_key_env)
+    if seed:
+        try:
+            key = InstallationKey.from_seed_b64(seed)
+        except ValueError:
+            # Never echo the value: it is a private key.
+            print(f"FAIL {args.installation_key_env} is not base64 of a 32-byte seed")
+            return 2
+    else:
+        print(
+            f"WARN {args.installation_key_env} is not set: self.ctx callbacks "
+            "will be unavailable"
+        )
+    missing = [
+        flag
+        for flag, value in (
+            ("--public-authority", args.public_authority),
+            ("--installation-id", args.installation_id),
+        )
+        if not value
+    ]
+    if missing and not args.insecure_host_authority:
+        print(
+            f"FAIL {' and '.join(missing)} required: without them a request "
+            "signed for another plugin or installation could be replayed here "
+            "(--insecure-host-authority allows it for local development only)"
+        )
+        return 2
+    plugin = _load_plugin_class(Path(args.path))()
+    try:
+        app = create_app(
+            plugin,
+            minder_url=minder_url,
+            installation_key=key,
+            installation_id=args.installation_id,
+            path_prefix=args.path_prefix,
+            public_authority=args.public_authority,
+            insecure_host_authority=args.insecure_host_authority,
+        )
+    except ValueError as exc:
+        print(f"FAIL {exc}")
+        return 2
+    if key is not None:
+        print(f"OK   installation keyid {key.keyid}")
+    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="minder-plugin")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -152,6 +221,52 @@ def main(argv: Optional[List[str]] = None) -> int:
     s = sub.add_parser("scaffold", help="generate a plugin skeleton")
     s.add_argument("name")
     s.add_argument("-o", "--out", default=None)
+    sv = sub.add_parser(
+        "serve",
+        help="run a plugin as a remote (T4) plugin (needs the serve extra)",
+        description=(
+            "Serve POST /minder/v1/invoke for a plugin: verify Minder's signed "
+            "invocations and sign the plugin's callbacks with the installation "
+            "key, read from an environment variable (never a flag)."
+        ),
+    )
+    sv.add_argument("path")
+    sv.add_argument("--minder-url", default=None, help="default: $MINDER_URL")
+    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=8080)
+    sv.add_argument(
+        "--installation-id",
+        default=os.environ.get("MINDER_PLUGIN_INSTALLATION_ID"),
+        help=(
+            "this installation's id; invocations for another one are refused "
+            "(default: $MINDER_PLUGIN_INSTALLATION_ID; required)"
+        ),
+    )
+    sv.add_argument(
+        "--installation-key-env",
+        default=DEFAULT_KEY_ENV,
+        help="variable holding base64 of the 32-byte Ed25519 seed",
+    )
+    sv.add_argument(
+        "--public-authority",
+        default=os.environ.get("MINDER_PLUGIN_PUBLIC_AUTHORITY"),
+        help=(
+            "this server's public host[:port] as in the installation's endpoint; "
+            "signatures for another host are refused (default: "
+            "$MINDER_PLUGIN_PUBLIC_AUTHORITY; required)"
+        ),
+    )
+    sv.add_argument(
+        "--insecure-host-authority",
+        action="store_true",
+        help=(
+            "LOCAL DEVELOPMENT ONLY: allow a missing --public-authority or "
+            "--installation-id (checks the Host header instead, so requests "
+            "signed for other plugins can be replayed here)"
+        ),
+    )
+    sv.add_argument("--path-prefix", default="", help="external path prefix")
+    sv.add_argument("--log-level", default="info")
 
     args = parser.parse_args(argv)
     if args.cmd == "validate":
@@ -160,6 +275,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _cmd_inspect(Path(args.path))
     if args.cmd == "scaffold":
         return _cmd_scaffold(args.name, args.out)
+    if args.cmd == "serve":
+        return _cmd_serve(args)
     return 2  # pragma: no cover
 
 
