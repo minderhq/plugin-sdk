@@ -33,6 +33,9 @@ class UnitConverterPlugin(PluginBase):
             },
             "action": "convert_length",
             "method": "GET",
+            # A pure calculation: no side effects, safe to repeat.
+            "effect": "read",
+            "idempotent": True,
         },
     ]
 

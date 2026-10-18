@@ -102,7 +102,14 @@ class Plugin(Protocol):
 # AI_TOOLS — advertise Ollama / OpenAI function-calling tools. A list of dicts:
 #     {name, description, parameters (JSON Schema), action}
 #   where ``action`` is one of ACTIONS. ``GET /v1/plugins/ai/tools`` aggregates
-#   these into tool definitions for function-calling chat.
+#   these into tool definitions for function-calling chat. Each entry SHOULD
+#   also declare what it does (see ``tool_effects.py``):
+#     "effect": "read" | "write" | "send" | "destructive",
+#     "idempotent": bool (optional), "hosts": [egress host, ...] (optional),
+#   and per argument in ``parameters.properties`` an optional "sensitivity":
+#     recipient | url | amount | free_text | bound:<attr>.
+#   Minder pauses tools that change or send data for user approval; a tool
+#   without ``effect`` still loads (check_plugin_warnings reports it).
 #
 # DISPLAY — branding for the plugin's card in the client. A plain dict:
 #     {"label": str, "summary": str, "logo": str, "color": str, "category": str}

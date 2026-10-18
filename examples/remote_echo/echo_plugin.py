@@ -43,6 +43,8 @@ class RemoteEchoPlugin(PluginBase):
                 "required": ["text"],
             },
             "action": "echo",
+            "effect": "read",
+            "idempotent": True,
         },
     ]
 

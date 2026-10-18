@@ -57,9 +57,73 @@ The registry drives this lifecycle: `register()` → `initialize()` →
 |-----------|--------------|
 | `CONFIG_SCHEMA` | Makes the plugin configurable over the API (`GET/PUT /v1/plugins/<name>/config`) — no container env + restart. The registry resolves `default → env → persisted` and calls `apply_config(effective)`. |
 | `ACTIONS` (+ `READ_ONLY_ACTIONS`) | A `frozenset` of method names invokable via `POST /v1/plugins/<name>/actions/<method>` (JWT-gated). Only listed names are reachable. |
-| `AI_TOOLS` | Advertise Ollama / OpenAI function-calling tools (`{name, description, parameters, action}`), aggregated at `GET /v1/plugins/ai/tools`. |
+| `AI_TOOLS` | Advertise Ollama / OpenAI function-calling tools (`{name, description, parameters, action, effect}`), aggregated at `GET /v1/plugins/ai/tools`. Declare each tool's `effect`; see [Tool effects](#tool-effects-what-a-tool-does). |
 | `DISPLAY` | Branding for the plugin's card in the client: `{label, summary, logo, color, category}`. `logo` is a lucide icon name. |
 | `REQUIRES` | What the plugin needs from the platform: `{services, optional_services, bundles}`. Lets the platform refuse to enable a plugin whose services are missing, offer to enable the bundles it needs, and show requirements on its card. Names are checked against `KNOWN_SERVICES` / `KNOWN_BUNDLES`. |
+
+## Tool effects: what a tool does
+
+Minder runs a read-only tool straight away and pauses a tool that changes or
+sends data until the user approves the call. So each `AI_TOOLS` entry declares
+what it does:
+
+```python
+AI_TOOLS = [
+    {
+        "name": "send_invoice",
+        "description": "Email an invoice to a customer.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "sensitivity": "recipient"},
+                "amount": {"type": "number", "sensitivity": "amount"},
+                "note": {"type": "string", "sensitivity": "free_text"},
+            },
+            "required": ["to", "amount"],
+        },
+        "action": "send_invoice",
+        "effect": "send",
+        "idempotent": False,
+        "hosts": ["api.mail.example.com"],
+    },
+]
+```
+
+| Field | Values |
+|-------|--------|
+| `effect` | `read`: no side effects. `write`: changes data inside the user's own systems. `send`: data leaves to a third party or a recipient (message, email, webhook, publish). `destructive`: deletes, or changes something irreversibly (including moving money). Declare the most consequential thing the tool can do. |
+| `idempotent` | Optional `bool`: calling it twice with the same arguments has the same effect as once. |
+| `sensitivity` (per argument, in `parameters.properties`) | `recipient`, `url`, `amount`, `free_text`, or `bound:<attr>` (the value must equal the current user's attribute, e.g. `bound:email`). Removed from the schema the model sees. A tool-level `sensitivities: {"<arg>": "<value>"}` map also works. |
+| `hosts` | Optional list of egress hosts the tool may reach (`api.example.com`, `*.example.com`). |
+
+All fields are optional in this release, so existing plugins keep loading.
+`check_plugin` fails on an invalid value (an unknown `effect`, a non-bool
+`idempotent`, an unknown sensitivity, a malformed host).
+`check_plugin_warnings` (printed as `WARN` by `minder-plugin validate`, which
+still passes) reports:
+
+- a tool without `effect`. Minder then infers one, and treats a tool it cannot
+  classify as `write`;
+- a declaration that strong evidence contradicts, i.e. evidence for a more
+  consequential class than the one declared: a verb in the tool or action name
+  (`send_*`, `notify_*`, `delete_*`, `update_*`, ...), a `GET` or `DELETE`
+  `method`, a recipient-like argument (`to`, `recipient`, `cc`, `bcc`,
+  `webhook_url`, ...) or a `recipient` sensitivity. For example a `read` tool
+  with a `to` argument, or `delete_note` declared `read`. Minder flags the same
+  contradictions and does not trust such a declaration.
+
+`mcp_annotations(effect, idempotent)` (or `tool_annotations(tool)`) maps an
+effect to MCP tool annotations, for plugins that also serve their tools over MCP:
+
+| `effect` | Annotations |
+|----------|-------------|
+| `read` | `readOnlyHint: true`, `destructiveHint: false` |
+| `write` | `readOnlyHint: false`, `destructiveHint: false` |
+| `send` | `readOnlyHint: false`, `destructiveHint: false`, `openWorldHint: true` |
+| `destructive` | `readOnlyHint: false`, `destructiveHint: true` |
+| undeclared | none (MCP clients assume the conservative defaults) |
+
+`idempotent` adds `idempotentHint`.
 
 ## Plugin-driven UI (the plugin owns its presentation)
 
@@ -394,12 +458,13 @@ The SDK is more than the contract — it ships the batteries a plugin author nee
 | Import | What |
 |--------|------|
 | `PluginBase` | Optional base class — sensible defaults for the whole lifecycle + the standard config flow, so a data-source plugin is just `register` + `collect_data`. |
-| `check_plugin(p)` / `run_lifecycle(p, ctx=None)` | Test helpers: contract violations as a list; drive the full lifecycle in a test (optionally with a bound context). |
+| `check_plugin(p)` / `check_plugin_warnings(p)` / `run_lifecycle(p, ctx=None)` | Test helpers: contract violations as a list; non-fatal findings (e.g. a tool without `effect`); drive the full lifecycle in a test (optionally with a bound context). |
 | `FakePlatformContext` | In-memory platform context (contract v2) for unit tests: secrets, grants/denials, recorded calls. |
 | `safe_http.safe_request` / `check_url` | SSRF-guarded outbound HTTP (needs `httpx`). |
 | `t4` / `t4_server` / `t4_callbacks` | Remote (T4) plugins: verify Minder's RFC 9421 signatures, `minder-plugin serve`, the signed grant-callback `ctx` (the `serve` extra). |
 | `resolve_config_schema` / `resolve_effective_config` / `validate_config` | Compile config to JSON Schema, resolve default→env→persisted, validate values. |
-| `build_tool_definitions` / `ai_tool_errors` | Turn `AI_TOOLS` into OpenAI/Ollama tool defs; validate they map to actions. |
+| `build_tool_definitions` / `ai_tool_errors` / `ai_tool_warnings` | Turn `AI_TOOLS` into OpenAI/Ollama tool defs; validate they map to actions and their effect declarations. |
+| `EFFECTS` / `Effect` / `AIToolSpec` / `mcp_annotations` / `tool_annotations` | Tool effect classes (`read`/`write`/`send`/`destructive`), the typed tool entry, and the effect-to-MCP-annotation mapping. |
 | `load_manifest` / `validate_manifest` | Parse + validate a `webhook → store-vector` manifest (bundled JSON Schema). |
 | `capabilities(p)` + `DataSource` / `Scheduler` / `WebhookHandler` / … | Introspect + type-check per-capability interfaces. |
 
