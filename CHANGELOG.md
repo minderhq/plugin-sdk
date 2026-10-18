@@ -5,6 +5,25 @@ evolve; changes are additive and backwards-compatible where possible.
 
 ## [Unreleased]
 
+### Tool effect classes
+Additive; a tool without the new fields still loads (warning only).
+- `AI_TOOLS` entries may declare `effect` (`read` / `write` / `send` /
+  `destructive`), `idempotent`, per-argument `sensitivity` (`recipient`, `url`,
+  `amount`, `free_text`, `bound:<attr>`; or a tool-level `sensitivities` map)
+  and egress `hosts`. Minder uses them to decide which tool calls need user
+  approval. New `tool_effects` module with `Effect`, `EFFECTS`, `AIToolSpec`
+  and `SENSITIVITIES`.
+- `check_plugin` fails on invalid values. New `check_plugin_warnings` /
+  `ai_tool_warnings` report a tool without `effect` and a declaration that the
+  tool's name, method or arguments contradict (e.g. `read` with a recipient
+  argument). `minder-plugin validate` prints them as `WARN` lines and still
+  passes.
+- `mcp_annotations` / `tool_annotations` map an effect to MCP tool annotations
+  (`readOnlyHint`, `destructiveHint`, `openWorldHint`, `idempotentHint`).
+- `build_tool_definitions` leaves the per-argument `sensitivity` out of the
+  parameters it hands to the model.
+- The examples declare `effect`.
+
 ### Platform context (contract v2)
 Additive; plugins that declare none of the new attributes are contract-v1
 plugins and keep working unchanged. This is groundwork for running plugins out

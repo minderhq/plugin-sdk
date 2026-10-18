@@ -1,10 +1,12 @@
 """Testing utilities for plugin authors.
 
 ``check_plugin(plugin)`` returns a list of contract violations (empty ⇒ the
-plugin honours the SDK contract). ``run_lifecycle(plugin)`` drives the full
-lifecycle the registry would and returns each step's output — drop either into
-your test suite. ``FakePlatformContext`` is an in-memory platform context
-(contract v2) for unit-testing plugins that use ``self.ctx``.
+plugin honours the SDK contract). ``check_plugin_warnings(plugin)`` returns
+non-fatal findings (e.g. an ``AI_TOOLS`` entry without ``effect``).
+``run_lifecycle(plugin)`` drives the full lifecycle the registry would and
+returns each step's output — drop any of them into your test suite.
+``FakePlatformContext`` is an in-memory platform context (contract v2) for
+unit-testing plugins that use ``self.ctx``.
 """
 
 import asyncio
@@ -26,7 +28,7 @@ from typing import (
     cast,
 )
 
-from .ai_tools import ai_tool_errors
+from .ai_tools import ai_tool_errors, ai_tool_warnings
 from .capabilities import capabilities
 from .context import (
     CAP_DOCUMENTS_INDEX,
@@ -47,7 +49,13 @@ from .requirements import requirement_errors
 from .schema import config_errors, resolve_config_schema, resolve_effective_config
 from .source_rules import plugin_source_errors
 
-__all__ = ["check_plugin", "run_lifecycle", "FakePlatformContext", "RecordedCall"]
+__all__ = [
+    "check_plugin",
+    "check_plugin_warnings",
+    "run_lifecycle",
+    "FakePlatformContext",
+    "RecordedCall",
+]
 
 
 def _await(value: Any) -> Any:
@@ -121,6 +129,15 @@ def check_plugin(plugin: Any) -> List[str]:
         problems.append(f"capabilities() failed: {exc}")
 
     return problems
+
+
+def check_plugin_warnings(plugin: Any) -> List[str]:
+    """Non-fatal findings that :func:`check_plugin` does not fail on. Empty ⇒
+    nothing to report. Today: ``AI_TOOLS`` entries without an ``effect``, and
+    declared effects that the tool's name, method or arguments contradict
+    (see ``tool_effects``). A missing ``effect`` may become an error in a
+    later release."""
+    return ai_tool_warnings(plugin)
 
 
 async def run_lifecycle(

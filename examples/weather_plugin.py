@@ -107,6 +107,10 @@ class WeatherPlugin:
             },
             "action": "get_weather",
             "method": "GET",
+            # A lookup: no side effects, so Minder runs it without asking.
+            "effect": "read",
+            "idempotent": True,
+            "hosts": ["api.open-meteo.com", "geocoding-api.open-meteo.com"],
         },
     ]
 

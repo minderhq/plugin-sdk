@@ -18,7 +18,7 @@ from typing import Any, List, Optional
 from .ai_tools import build_tool_definitions
 from .capabilities import capabilities
 from .declarations import contract_version
-from .harness import check_plugin
+from .harness import check_plugin, check_plugin_warnings
 from .manifest import validate_manifest
 from .requirements import requirements
 from .schema import resolve_config_schema
@@ -98,6 +98,8 @@ def _cmd_validate(path: Path) -> int:
         return 0
     plugin = _load_plugin_class(path)()
     problems: List[str] = check_plugin(plugin)
+    for w in check_plugin_warnings(plugin):
+        print(f"WARN {w}")
     if problems:
         print(f"FAIL {len(problems)} problem(s):")
         for p in problems:

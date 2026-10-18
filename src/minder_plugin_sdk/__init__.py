@@ -5,7 +5,8 @@
 Modules: ``contract`` (Plugin Protocol + PluginMetadata + CONFIG_SCHEMA / ACTIONS
 / AI_TOOLS / DISPLAY extension points) · ``base`` (PluginBase convenience class) ·
 ``schema`` (JSON-Schema config: compile, resolve, validate) · ``capabilities``
-(the capability model + per-capability protocols) · ``ai_tools`` · ``manifest`` ·
+(the capability model + per-capability protocols) · ``ai_tools`` ·
+``tool_effects`` (effect classes, MCP annotations) · ``manifest`` ·
 ``harness`` (test helpers, ``FakePlatformContext``) · ``errors`` · ``context``
 (the platform context, contract v2) · ``declarations`` (``CONTRACT_VERSION``,
 ``MANAGES``, ``EGRESS``, ``TIMESERIES``) · ``source_rules`` · ``safe_http``
@@ -13,7 +14,7 @@ Modules: ``contract`` (Plugin Protocol + PluginMetadata + CONFIG_SCHEMA / ACTION
 ``minder-plugin``. Worked plugins in ``examples/``.
 """
 
-from .ai_tools import ai_tool_errors, build_tool_definitions
+from .ai_tools import ai_tool_errors, ai_tool_warnings, build_tool_definitions
 from .base import PluginBase
 from .capabilities import (
     KNOWN_CAPABILITIES,
@@ -46,7 +47,12 @@ from .errors import (
     PluginError,
     UnsafeURLError,
 )
-from .harness import FakePlatformContext, check_plugin, run_lifecycle
+from .harness import (
+    FakePlatformContext,
+    check_plugin,
+    check_plugin_warnings,
+    run_lifecycle,
+)
 from .influx import (
     escape_tag,
     latest_influx_date,
@@ -68,6 +74,18 @@ from .schema import (
     resolve_config_schema,
     resolve_effective_config,
     validate_config,
+)
+from .tool_effects import (
+    DESTRUCTIVE,
+    EFFECTS,
+    READ,
+    SEND,
+    SENSITIVITIES,
+    WRITE,
+    AIToolSpec,
+    Effect,
+    mcp_annotations,
+    tool_annotations,
 )
 
 API_VERSION = "minder.dev/v1"
@@ -105,6 +123,18 @@ __all__ = [
     # ai tools
     "build_tool_definitions",
     "ai_tool_errors",
+    "ai_tool_warnings",
+    # tool effect classes
+    "Effect",
+    "AIToolSpec",
+    "EFFECTS",
+    "READ",
+    "WRITE",
+    "SEND",
+    "DESTRUCTIVE",
+    "SENSITIVITIES",
+    "mcp_annotations",
+    "tool_annotations",
     # manifest
     "load_manifest",
     "validate_manifest",
@@ -121,6 +151,7 @@ __all__ = [
     "KNOWN_BUNDLES",
     # testing
     "check_plugin",
+    "check_plugin_warnings",
     "run_lifecycle",
     "FakePlatformContext",
     # errors
