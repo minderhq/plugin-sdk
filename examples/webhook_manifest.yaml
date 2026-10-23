@@ -1,6 +1,6 @@
 # A webhook-mode plugin: a declarative inbound webhook -> store-vector pipeline,
 # installable at runtime with NO code compiled into Minder. This is the shape
-# most third-party integrations should use instead of an in-process code plugin
+# most third-party integrations should use instead of a code plugin
 # (see docs/plugins/webhook-vs-code-plugin.md and examples/webhook_plugin.py).
 # Validate with:  minder-plugin validate examples/webhook_manifest.yaml
 apiVersion: minder.dev/v1alpha1

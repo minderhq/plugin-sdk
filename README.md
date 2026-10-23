@@ -5,8 +5,11 @@ The authoring contract for **Minder** module plugins — the `Plugin` lifecycle,
 manifest JSON Schema, and a complete worked reference plugin.
 
 > Minder is a self-hostable, local-first AI platform (RAG + knowledge graph +
-> local LLMs) extended by **plugins**. Plugins are **manifest-based and run no
-> arbitrary uploaded code** — new actions are fixed, reviewed handlers. This repo
+> local LLMs) extended by **plugins**. A plugin is either
+> **reviewed Python code**, merged into the catalog by pull request, or a
+> **declarative manifest** that runs no plugin code. Both run isolated, out of
+> process, in a `plugin-runner`, and no user-uploaded code runs. AI tools declare
+> an `effect`, and write/send/destructive ones pause for user approval. This repo
 > is everything a third party needs to write one; the core platform is
 > documented at [minderhq.github.io/docs](https://minderhq.github.io/docs/).
 
@@ -19,9 +22,10 @@ the [contract reference](https://minderhq.github.io/docs/plugins/contract/), and
 ## Install
 
 ```bash
-pip install minder-plugin-sdk        # once published
-# or, from source:
+# Not on PyPI yet. Install from git:
 pip install "git+https://github.com/minderhq/plugin-sdk"
+# once published to PyPI:
+# pip install minder-plugin-sdk
 ```
 
 ## The contract in 30 seconds
@@ -131,7 +135,7 @@ Every plugin's config needs are different — a long value wants a `textarea`, a
 city wants autocomplete from a source, a flag wants a toggle. So the **plugin
 self-describes** how each field renders, and the **trusted client** draws it with
 its own components. Plugins never ship HTML/templates — that would be an injection
-vector and break the "no arbitrary code" guarantee; presentation is **declarative**.
+vector and break the "no user-uploaded code" guarantee; presentation is **declarative**.
 
 Add these optional keys to any `CONFIG_SCHEMA` field:
 
@@ -158,22 +162,24 @@ logo. (Client + registry wiring is tracked in Minder core.)
   defines `register`. Export exactly the plugin class via `__all__`.
 - **Only `ACTIONS` names are reachable** over HTTP — nothing else on the instance.
   Reads go through `/collect` + `/analysis`; `ACTIONS` is for state changes.
-- **Backend config is injected** by the registry into `self.config`: `redis`,
-  `influxdb` and, when available, `database`. There is **no** `postgres` or
-  `qdrant` key — read what you need from `self.config` and don't hard-wire hosts.
+- **Backend config is injected** by the registry into `self.config`. The only
+  backend handle is the per-plugin scoped `database`, and only when available.
+  There is **no** `postgres`, `qdrant`, `redis` or `influxdb` key. Time series,
+  secrets and calls to other plugins go through the platform context
+  (`self.ctx`, below), and don't hard-wire hosts.
   Don't read `POSTGRES_*` (or other platform credentials) from the environment
   either.
 - **`config["database"]` is a least-privilege Postgres handle**, not the
   platform's database credentials:
 
   ```python
-  {"host": ..., "port": ..., "user": "minder_plugins", "password": ...,
-   "database": ..., "schema": "plugin_data"}
+  {"host": ..., "port": ..., "user": "minder_plugins_<plugin>", "password": ...,
+   "database": ..., "schema": "plugin_<plugin>"}
   ```
 
-  - The role only has its own schema (`plugin_data`) and has **no access to
-    platform tables**.
-  - Its `search_path` is pinned to `plugin_data`, so an unqualified
+  - The role only has its plugin's own schema (`plugin_<plugin>`) and has **no
+    access to platform tables**.
+  - Its `search_path` is pinned to that schema, so an unqualified
     `CREATE TABLE` lands there, owned by the plugin. `schema` is passed
     explicitly too, so you can schema-qualify your own DDL.
   - **The key may be missing.** If the operator hasn't configured the plugin
@@ -183,13 +189,12 @@ logo. (Client + registry wiring is tracked in Minder core.)
 
 ## Platform context (contract v2)
 
-Plugins may run in a separate process from the platform (out-of-process
-execution). That process holds **no platform credentials** and cannot reach
+Plugins run in a separate process from the platform (a `plugin-runner`). That process holds **no platform credentials** and cannot reach
 platform services directly, so a plugin asks the platform for what it needs
 through **`self.ctx`**, the platform context. The platform checks every call
 against a grant for the current invocation: this plugin, the invoking
 tenant/owner, and the capabilities the plugin declared. The same plugin code
-works whether it runs in-process or out-of-process.
+works whether it is hosted in a runner or run directly (for example in tests).
 
 Contract v2 is **opt-in and additive**. A plugin that declares none of the
 attributes below is a contract-v1 plugin and keeps working unchanged.
@@ -432,7 +437,7 @@ published at <https://minderhq.github.io/docs/schemas/declarative-manifest.v1alp
 `spec.runtime.kind`. These schemas are the single source of the manifest
 contract: Minder validates against the same files. This is the
 **installable, runtime** shape most **third-party** integrations should use rather
-than an in-process code plugin — see
+than a code plugin — see
 [`docs/plugins/webhook-vs-code-plugin.md`](docs/plugins/webhook-vs-code-plugin.md)
 for which shape to pick. Reach for a manifest when you just need to pipe a webhook
 into the vector store; add a small `handle_webhook` handler
