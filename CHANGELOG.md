@@ -5,6 +5,25 @@ evolve; changes are additive and backwards-compatible where possible.
 
 ## [Unreleased]
 
+### Manifest schemas
+The bundled schemas are now the single source of the manifest contract; Minder
+validates against the same files.
+- `manifest.schema.json` gains the `schedule` and `poll` triggers and the
+  `http-request` and `plugin-action` actions, which Minder already runs. A
+  `webhook` trigger now requires `secretRef` (Minder refuses an unsigned
+  webhook), `/t0/` webhook paths are reserved, and a `store-vector` text
+  template may not be empty. The schema has an `$id`:
+  `https://minderhq.github.io/docs/schemas/manifest.v1alpha1.json`.
+- New `declarative-manifest.schema.json` for declarative connectors
+  (`spec.runtime.kind: declarative`), `$id`
+  `https://minderhq.github.io/docs/schemas/declarative-manifest.v1alpha1.json`.
+  It covers the runtime, egress, bases and auth, limits, time series, tools,
+  actions, the schedule and the signed webhook. Unknown fields are refused.
+- `validate_manifest` and `minder-plugin validate` pick the schema from
+  `spec.runtime.kind`; `minder-plugin validate` also reads `.json` manifests.
+  New `declarative_manifest_schema()` and `is_declarative_manifest()`.
+- Tests validate the catalog's declarative manifests against the schema.
+
 ### Tool effect classes
 Additive; a tool without the new fields still loads (warning only).
 - `AI_TOOLS` entries may declare `effect` (`read` / `write` / `send` /

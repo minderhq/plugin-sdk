@@ -3,9 +3,11 @@ scaffold, and the plugin-class loader's discovery + error branches. Each command
 is driven through `cli.main([...])` and asserted on its exit code / output.
 """
 
+import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from minder_plugin_sdk import cli
 
@@ -55,6 +57,7 @@ spec:
     type: webhook
     webhook:
       path: /discord/webhook
+      secretRef: discord.secret
   action:
     type: store-vector
     store:
@@ -195,3 +198,11 @@ def test_load_plugin_class_raises_when_unimportable(tmp_path):
     p.write_text("nope", encoding="utf-8")
     with pytest.raises(RuntimeError, match="cannot import"):
         cli._load_plugin_class(p)
+
+
+def test_validate_accepts_a_declarative_json_manifest(tmp_path, capsys):
+    fixture = Path(__file__).parent / "fixtures" / "catalog" / "frankfurter.yml"
+    data = yaml.safe_load(fixture.read_text(encoding="utf-8"))
+    rc = cli.main(["validate", str(_write(tmp_path, "m.json", json.dumps(data)))])
+    assert rc == 0
+    assert "manifest is valid" in capsys.readouterr().out

@@ -418,9 +418,19 @@ the shared test vectors.
 
 ## Manifest plugins (data-ingestion)
 
-A separate, declarative mechanism for `webhook → store-vector` ingestion — a YAML
-manifest that supplies **parameters only** (no code). Its JSON Schema (draft-07)
-is [`src/minder_plugin_sdk/schemas/manifest.schema.json`](src/minder_plugin_sdk/schemas/manifest.schema.json). This is the
+A separate, declarative mechanism for ingestion — a YAML manifest that supplies
+**parameters only** (no code): one trigger (`webhook`, `schedule`, `poll`) and one
+action (`store-vector`, `http-request`, `plugin-action`). Its JSON Schema (draft-07)
+is [`src/minder_plugin_sdk/schemas/manifest.schema.json`](src/minder_plugin_sdk/schemas/manifest.schema.json),
+published at <https://minderhq.github.io/docs/schemas/manifest.v1alpha1.json>.
+A **declarative connector** (`spec.runtime.kind: declarative`: HTTP tools,
+actions, a schedule and a signed webhook, run by Minder's connector engine) has
+its own schema,
+[`src/minder_plugin_sdk/schemas/declarative-manifest.schema.json`](src/minder_plugin_sdk/schemas/declarative-manifest.schema.json),
+published at <https://minderhq.github.io/docs/schemas/declarative-manifest.v1alpha1.json>.
+`validate_manifest` / `minder-plugin validate` pick the schema from
+`spec.runtime.kind`. These schemas are the single source of the manifest
+contract: Minder validates against the same files. This is the
 **installable, runtime** shape most **third-party** integrations should use rather
 than an in-process code plugin — see
 [`docs/plugins/webhook-vs-code-plugin.md`](docs/plugins/webhook-vs-code-plugin.md)
@@ -465,7 +475,8 @@ The SDK is more than the contract — it ships the batteries a plugin author nee
 | `resolve_config_schema` / `resolve_effective_config` / `validate_config` | Compile config to JSON Schema, resolve default→env→persisted, validate values. |
 | `build_tool_definitions` / `ai_tool_errors` / `ai_tool_warnings` | Turn `AI_TOOLS` into OpenAI/Ollama tool defs; validate they map to actions and their effect declarations. |
 | `EFFECTS` / `Effect` / `AIToolSpec` / `mcp_annotations` / `tool_annotations` | Tool effect classes (`read`/`write`/`send`/`destructive`), the typed tool entry, and the effect-to-MCP-annotation mapping. |
-| `load_manifest` / `validate_manifest` | Parse + validate a `webhook → store-vector` manifest (bundled JSON Schema). |
+| `load_manifest` / `validate_manifest` | Parse + validate a manifest plugin or a declarative connector manifest (bundled JSON Schemas). |
+| `manifest_schema` / `declarative_manifest_schema` / `is_declarative_manifest` | The bundled schemas, and which one a manifest is checked against. |
 | `capabilities(p)` + `DataSource` / `Scheduler` / `WebhookHandler` / … | Introspect + type-check per-capability interfaces. |
 
 ### CLI
