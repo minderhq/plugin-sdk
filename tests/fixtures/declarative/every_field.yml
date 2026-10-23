@@ -1,0 +1,135 @@
+# A declarative connector manifest that sets every field the schema knows, so
+# the schema is exercised end to end. Not a real plugin.
+apiVersion: minder.dev/v1alpha1
+kind: Plugin
+metadata:
+  name: every-field
+  version: 0.1.0
+  description: Exercises every declarative manifest field.
+  author: example
+  stable_id: example.every-field
+spec:
+  runtime: {kind: declarative, engine: 1}
+  display:
+    label: Every field
+    summary: Exercises every declarative manifest field.
+    category: data-source
+  config_schema:
+    - key: API_TOKEN
+      type: secret
+      description: Token for the example API.
+    - key: LANG
+      type: string
+      default: en
+    - key: HOOK_SECRET
+      type: secret
+  egress:
+    - host: api.example.com
+    - host: "*.example.org"
+      http: false
+  bases:
+    api:
+      url: https://api.example.com/v2
+      auth: {type: api_key, in: header, name: X-Api-Key, secret: API_TOKEN}
+    wiki:
+      url: "https://{config.LANG|en}.example.org"
+      auth: {type: none}
+  limits:
+    timeout_s: 5
+    max_response_bytes: 1048576
+    max_concurrency: 2
+    rate_per_minute: 60
+  timeseries: {measurements: [item_count]}
+  tools:
+    search:
+      description: Search the example API.
+      effect: read
+      read_only: true
+      parameters:
+        type: object
+        properties:
+          query: {type: string}
+        required: [query]
+      vars:
+        q: trim(params.query)
+      steps:
+        - name: hits
+          when: vars.q != ''
+          request:
+            method: GET
+            base: api
+            path: /search
+            query: {q: "{vars.q}", limit: 10, exact: false}
+            headers: {Accept: application/json}
+            response: json
+            empty_body: "null"
+            follow_redirects: false
+            accept_status: [404]
+            paginate:
+              type: cursor
+              max_pages: 2
+              items: results
+              param: cursor
+              next: next_cursor
+          select: results
+        - name: detail
+          foreach: steps.hits
+          max_items: 5
+          request:
+            base: api
+            path: "/items/{item.id}"
+      output: "{hits: steps.hits, detail: steps.detail}"
+      error_output: "{error: error.kind}"
+      on_error: {error: unavailable}
+  actions:
+    ingest:
+      description: Store a delivered event.
+      read_only: false
+      admin_only: false
+      parameters:
+        type: object
+        properties:
+          body: {type: object}
+      steps:
+        - name: post
+          request:
+            method: POST
+            base: api
+            path: /events
+            body:
+              json: {event: "{params.body.id}"}
+      output: "{stored: `true`}"
+    feed:
+      description: Fetch the example feed.
+      steps:
+        - name: atom
+          request:
+            base: wiki
+            path: /feed
+            response: xml
+            xml:
+              namespaces: keep
+              prefixes: {atom: "http://www.w3.org/2005/Atom"}
+      timeseries:
+        measurement: item_count
+        points: "[{fields: {count: length(steps.atom.feed.entry || `[]`)}}]"
+        tags: {source: "'feed'"}
+      output: "{written: timeseries.written}"
+  schedule:
+    cron: "*/15 * * * *"
+    vars:
+      lang: config.LANG
+    steps:
+      - name: page
+        request:
+          base: api
+          path: /count
+          paginate: {type: page, param: page, size_param: per_page, size: 50}
+    measurement: item_count
+    points: "[{fields: {count: steps.page.total}}]"
+    tags: {lang: vars.lang}
+    output: "{written: timeseries.written, at: now}"
+    error_output: "{written: `0`, error: error.kind}"
+  webhook:
+    action: ingest
+    secret: HOOK_SECRET

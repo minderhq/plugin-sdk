@@ -20,7 +20,10 @@ VALID = {
     "kind": "Plugin",
     "metadata": {"name": "discord-ingest", "version": "1.0.0"},
     "spec": {
-        "trigger": {"type": "webhook", "webhook": {"path": "/discord/webhook"}},
+        "trigger": {
+            "type": "webhook",
+            "webhook": {"path": "/discord/webhook", "secretRef": "discord.secret"},
+        },
         "action": {
             "type": "store-vector",
             "store": {
@@ -42,6 +45,7 @@ spec:
     type: webhook
     webhook:
       path: /discord/webhook
+      secretRef: discord.secret
   action:
     type: store-vector
     store:

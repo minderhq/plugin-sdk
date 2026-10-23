@@ -1,9 +1,18 @@
-"""Manifest plugins — the declarative ``webhook → store-vector`` mechanism.
+"""Manifests — plugins expressed as data, with no plugin code.
 
-A manifest supplies **parameters only** (no code). This module loads a manifest
-(YAML text or an already-parsed dict) and validates it against the bundled JSON
-Schema. If the optional ``jsonschema`` extra is installed it does full validation;
-otherwise it falls back to a light structural check of the required shape.
+Two documents share ``apiVersion: minder.dev/v1alpha1`` / ``kind: Plugin``:
+
+* a **manifest plugin**: one trigger (``webhook``, ``schedule``, ``poll``) and
+  one action (``store-vector``, ``http-request``, ``plugin-action``) —
+  ``schemas/manifest.schema.json``;
+* a **declarative connector** (``spec.runtime.kind: declarative``): HTTP tools,
+  actions, a schedule and a webhook run by Minder's connector engine —
+  ``schemas/declarative-manifest.schema.json``.
+
+This module loads a manifest (YAML text or an already-parsed dict) and validates
+it against the bundled JSON Schema for its kind. If the optional ``jsonschema``
+extra is installed it does full validation; otherwise it falls back to a light
+structural check of the required shape.
 """
 
 import json
@@ -12,17 +21,40 @@ from typing import Any, Dict, List, Union, cast
 
 from .errors import ManifestError
 
-__all__ = ["load_manifest", "validate_manifest", "manifest_schema"]
+__all__ = [
+    "load_manifest",
+    "validate_manifest",
+    "manifest_schema",
+    "declarative_manifest_schema",
+    "is_declarative_manifest",
+]
 
 
-def manifest_schema() -> Dict[str, Any]:
-    """The bundled manifest JSON Schema (draft-07)."""
+def _bundled_schema(name: str) -> Dict[str, Any]:
     text = (
         resources.files("minder_plugin_sdk.schemas")
-        .joinpath("manifest.schema.json")
+        .joinpath(name)
         .read_text(encoding="utf-8")
     )
     return cast(Dict[str, Any], json.loads(text))
+
+
+def manifest_schema() -> Dict[str, Any]:
+    """The bundled manifest-plugin JSON Schema (draft-07)."""
+    return _bundled_schema("manifest.schema.json")
+
+
+def declarative_manifest_schema() -> Dict[str, Any]:
+    """The bundled declarative-connector manifest JSON Schema (draft-07)."""
+    return _bundled_schema("declarative-manifest.schema.json")
+
+
+def is_declarative_manifest(manifest: Any) -> bool:
+    """Whether ``manifest`` declares the declarative connector runtime
+    (``spec.runtime.kind: declarative``)."""
+    spec = manifest.get("spec") if isinstance(manifest, dict) else None
+    runtime = spec.get("runtime") if isinstance(spec, dict) else None
+    return isinstance(runtime, dict) and runtime.get("kind") == "declarative"
 
 
 def load_manifest(source: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
@@ -66,6 +98,14 @@ def _light_errors(m: Dict[str, Any]) -> List[str]:
     spec = m.get("spec")
     if "spec" in m and not isinstance(spec, dict):
         errors.append("spec must be an object")
+    elif is_declarative_manifest(m):
+        assert isinstance(spec, dict)
+        if not isinstance(spec.get("egress"), list) or not spec["egress"]:
+            errors.append("spec.egress needs at least one host")
+        if not isinstance(spec.get("bases"), dict) or not spec["bases"]:
+            errors.append("spec.bases needs at least one base")
+        if not (spec.get("tools") or spec.get("actions") or spec.get("schedule")):
+            errors.append("spec: declare at least one tool, action or schedule")
     elif isinstance(spec, dict):
         trigger = spec.get("trigger")
         if "trigger" not in spec:
@@ -90,13 +130,21 @@ def _light_errors(m: Dict[str, Any]) -> List[str]:
 
 def validate_manifest(source: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Validate a manifest; return the parsed dict on success, else raise
-    :class:`ManifestError` with per-issue messages. Uses ``jsonschema`` for full
-    validation when available, else a light structural check."""
+    :class:`ManifestError` with per-issue messages. A declarative connector
+    (``spec.runtime.kind: declarative``) is checked against
+    :func:`declarative_manifest_schema`, any other manifest against
+    :func:`manifest_schema`. Uses ``jsonschema`` for full validation when
+    available, else a light structural check."""
     manifest = load_manifest(source)
+    schema = (
+        declarative_manifest_schema()
+        if is_declarative_manifest(manifest)
+        else manifest_schema()
+    )
     try:
         import jsonschema  # optional extra for full validation
 
-        validator = jsonschema.Draft7Validator(manifest_schema())
+        validator = jsonschema.Draft7Validator(schema)
         errors = [
             f"{'/'.join(str(p) for p in e.path) or '<root>'}: {e.message}"
             for e in validator.iter_errors(manifest)

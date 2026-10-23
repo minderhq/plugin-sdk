@@ -59,7 +59,13 @@ from .influx import (
     line_protocol,
     write_history,
 )
-from .manifest import load_manifest, manifest_schema, validate_manifest
+from .manifest import (
+    declarative_manifest_schema,
+    is_declarative_manifest,
+    load_manifest,
+    manifest_schema,
+    validate_manifest,
+)
 from .requirements import (
     KNOWN_BUNDLES,
     KNOWN_SERVICES,
@@ -139,6 +145,8 @@ __all__ = [
     "load_manifest",
     "validate_manifest",
     "manifest_schema",
+    "declarative_manifest_schema",
+    "is_declarative_manifest",
     # influx time-series helpers
     "latest_influx_date",
     "write_history",

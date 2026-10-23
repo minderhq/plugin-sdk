@@ -88,7 +88,7 @@ def _load_plugin_class(path: Path) -> Any:
 
 
 def _cmd_validate(path: Path) -> int:
-    if path.suffix in (".yaml", ".yml"):
+    if path.suffix in (".yaml", ".yml", ".json"):
         try:
             validate_manifest(path.read_text(encoding="utf-8"))
         except Exception as exc:

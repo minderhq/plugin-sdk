@@ -1,22 +1,35 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://minderhq.github.io/docs/schemas/manifest.v1alpha1.json",
   "title": "Minder MVP Plugin Manifest",
   "type": "object",
-  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
   "properties": {
     "apiVersion": {
       "type": "string",
-      "enum": ["minder.dev/v1alpha1"],
-      "description": "API version for this declarative manifest format. Intentionally versioned separately from the Python plugin contract's api_version (minder.dev/v1, see contract.py) -- this format is still experimental; don't reuse one string for the other (#17)."
+      "enum": [
+        "minder.dev/v1alpha1"
+      ],
+      "description": "API version for this declarative manifest format. Intentionally versioned separately from the Python plugin contract's api_version (minder.dev/v1, see contract.py) -- this format is still experimental; don't reuse one string for the other."
     },
     "kind": {
       "type": "string",
-      "enum": ["Plugin"],
+      "enum": [
+        "Plugin"
+      ],
       "description": "Resource kind"
     },
     "metadata": {
       "type": "object",
-      "required": ["name", "version"],
+      "required": [
+        "name",
+        "version"
+      ],
       "properties": {
         "name": {
           "type": "string",
@@ -39,54 +52,173 @@
     },
     "spec": {
       "type": "object",
-      "required": ["trigger", "action"],
+      "required": [
+        "trigger",
+        "action"
+      ],
       "properties": {
         "trigger": {
           "type": "object",
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "properties": {
             "type": {
               "type": "string",
-              "enum": ["webhook"],
-              "description": "Trigger type - only webhook supported in MVP"
+              "enum": [
+                "webhook",
+                "schedule",
+                "poll"
+              ],
+              "description": "Trigger type"
             },
             "webhook": {
               "type": "object",
-              "required": ["path"],
+              "required": [
+                "path"
+              ],
               "properties": {
                 "path": {
                   "type": "string",
                   "pattern": "^/[a-z0-9-/]+$",
                   "minLength": 2,
                   "maxLength": 100,
-                  "description": "Webhook path (e.g., /discord/webhook)"
+                  "description": "Webhook path (e.g., /discord/webhook). When the trigger type is webhook, /t0/ is reserved for declarative connector webhooks."
                 },
                 "method": {
                   "type": "string",
-                  "enum": ["POST"],
+                  "enum": [
+                    "POST"
+                  ],
                   "default": "POST"
                 },
                 "secretRef": {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9._-]*$",
-                  "description": "Reference to secret in secrets store"
+                  "description": "Reference to the secret in the secrets store that signs each delivery. Required when the trigger type is webhook: an unsigned webhook would run unauthenticated."
+                }
+              }
+            },
+            "schedule": {
+              "type": "object",
+              "required": [
+                "cron"
+              ],
+              "description": "Cron-style periodic trigger.",
+              "properties": {
+                "cron": {
+                  "type": "string",
+                  "pattern": "^\\S+(\\s+\\S+){4}$",
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "description": "5-field cron expression (min hour dom mon dow), e.g. '0 * * * *'"
+                }
+              }
+            },
+            "poll": {
+              "type": "object",
+              "required": [
+                "url"
+              ],
+              "description": "Periodic HTTP GET fetch. SSRF-guarded at runtime the same way the webcrawl connector plugin is (private/loopback/link-local/cloud-metadata rejected, redirects re-checked).",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "pattern": "^https?://",
+                  "minLength": 8,
+                  "maxLength": 2048,
+                  "description": "URL to GET on each poll (http(s) only)"
+                },
+                "headers": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Static request headers"
                 }
               }
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "webhook"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "webhook"
+                ],
+                "properties": {
+                  "webhook": {
+                    "required": [
+                      "secretRef"
+                    ],
+                    "properties": {
+                      "path": {
+                        "not": {
+                          "pattern": "^/t0/"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "schedule"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "schedule"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "poll"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "poll"
+                ]
+              }
+            }
+          ]
         },
         "action": {
           "type": "object",
-          "required": ["type", "store"],
+          "required": [
+            "type"
+          ],
           "properties": {
             "type": {
               "type": "string",
-              "enum": ["store-vector"],
-              "description": "Action type - only store-vector supported in MVP"
+              "enum": [
+                "store-vector",
+                "http-request",
+                "plugin-action"
+              ],
+              "description": "Action type"
             },
             "store": {
               "type": "object",
-              "required": ["collection", "input"],
+              "required": [
+                "collection",
+                "input"
+              ],
               "description": "Vector storage configuration",
               "properties": {
                 "collection": {
@@ -98,7 +230,9 @@
                 },
                 "input": {
                   "type": "object",
-                  "required": ["text"],
+                  "required": [
+                    "text"
+                  ],
                   "properties": {
                     "text": {
                       "type": "string",
@@ -112,15 +246,139 @@
                 },
                 "embedModel": {
                   "type": "string",
-                  "enum": ["all-minilm", "nomic-embed-text", "mxbai-embed-large"],
+                  "enum": [
+                    "all-minilm",
+                    "nomic-embed-text",
+                    "mxbai-embed-large"
+                  ],
                   "default": "all-minilm",
                   "description": "Embedding model to use"
                 }
               }
+            },
+            "httpRequest": {
+              "type": "object",
+              "required": [
+                "url"
+              ],
+              "description": "Templated outbound HTTP call. Method, URL, headers and body are templated from the trigger payload; the same SSRF guard as poll/webcrawl is enforced at runtime.",
+              "properties": {
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE"
+                  ],
+                  "default": "POST"
+                },
+                "url": {
+                  "type": "string",
+                  "pattern": "^https?://",
+                  "minLength": 8,
+                  "maxLength": 2048,
+                  "description": "Templated target URL, e.g. https://example.com/{{ .id }}"
+                },
+                "headers": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "Templated request headers"
+                },
+                "body": {
+                  "type": "object",
+                  "description": "Templated JSON request body"
+                }
+              }
+            },
+            "pluginAction": {
+              "type": "object",
+              "required": [
+                "plugin",
+                "action"
+              ],
+              "description": "Invoke another already-installed plugin's own whitelisted action. 'action' must already be present in the target plugin's own ACTIONS/READ_ONLY_ACTIONS -- never an arbitrary method.",
+              "properties": {
+                "plugin": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]*$",
+                  "description": "Target plugin name"
+                },
+                "action": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+                  "description": "Action name; must be in the target plugin's ACTIONS/READ_ONLY_ACTIONS"
+                },
+                "params": {
+                  "type": "object",
+                  "description": "Templated parameters"
+                }
+              }
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "store-vector"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "store"
+                ],
+                "properties": {
+                  "store": {
+                    "properties": {
+                      "input": {
+                        "properties": {
+                          "text": {
+                            "minLength": 1
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "http-request"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "httpRequest"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": "plugin-action"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "pluginAction"
+                ]
+              }
+            }
+          ]
         }
       }
     }
-  }
+  },
+  "description": "A manifest plugin: one trigger (webhook, schedule or poll) and one action (store-vector, http-request or plugin-action), parameters only, no code. A declarative connector (spec.runtime.kind: declarative) is described by declarative-manifest.v1alpha1.json instead."
 }
