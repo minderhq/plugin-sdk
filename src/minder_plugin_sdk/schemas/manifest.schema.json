@@ -75,8 +75,7 @@
             "webhook": {
               "type": "object",
               "required": [
-                "path",
-                "secretRef"
+                "path"
               ],
               "properties": {
                 "path": {
@@ -84,10 +83,7 @@
                   "pattern": "^/[a-z0-9-/]+$",
                   "minLength": 2,
                   "maxLength": 100,
-                  "description": "Webhook path (e.g., /discord/webhook). /t0/ is reserved for declarative connector webhooks.",
-                  "not": {
-                    "pattern": "^/t0/"
-                  }
+                  "description": "Webhook path (e.g., /discord/webhook). When the trigger type is webhook, /t0/ is reserved for declarative connector webhooks."
                 },
                 "method": {
                   "type": "string",
@@ -99,7 +95,7 @@
                 "secretRef": {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9._-]*$",
-                  "description": "Reference to the secret in the secrets store that signs each delivery. Required: an unsigned webhook would run unauthenticated."
+                  "description": "Reference to the secret in the secrets store that signs each delivery. Required when the trigger type is webhook: an unsigned webhook would run unauthenticated."
                 }
               }
             },
@@ -155,7 +151,21 @@
               "then": {
                 "required": [
                   "webhook"
-                ]
+                ],
+                "properties": {
+                  "webhook": {
+                    "required": [
+                      "secretRef"
+                    ],
+                    "properties": {
+                      "path": {
+                        "not": {
+                          "pattern": "^/t0/"
+                        }
+                      }
+                    }
+                  }
+                }
               }
             },
             {
@@ -226,8 +236,7 @@
                   "properties": {
                     "text": {
                       "type": "string",
-                      "description": "Template for text to embed (e.g., {{ .content }})",
-                      "minLength": 1
+                      "description": "Template for text to embed (e.g., {{ .content }})"
                     },
                     "metadata": {
                       "type": "object",
@@ -322,7 +331,20 @@
               "then": {
                 "required": [
                   "store"
-                ]
+                ],
+                "properties": {
+                  "store": {
+                    "properties": {
+                      "input": {
+                        "properties": {
+                          "text": {
+                            "minLength": 1
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
             },
             {

@@ -135,6 +135,24 @@ def test_an_empty_store_text_template_is_refused():
     assert _errors(_plugin(WEBHOOK, action))
 
 
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        # An inactive webhook block is not checked like an active one.
+        {**SCHEDULE, "webhook": {"path": "/in"}},
+        {**POLL, "webhook": {"path": "/t0/in"}},
+    ],
+)
+def test_webhook_rules_apply_only_to_an_active_webhook_trigger(trigger):
+    assert _errors(_plugin(trigger, STORE)) == []
+
+
+@pytest.mark.parametrize("action", [HTTP, PLUGIN_ACTION])
+def test_the_store_text_rule_applies_only_to_an_active_store_action(action):
+    leftover = {"collection": "events", "input": {"text": ""}}
+    assert _errors(_plugin(WEBHOOK, {**action, "store": leftover})) == []
+
+
 @pytest.mark.parametrize("path", sorted(EXAMPLES.glob("*manifest*.yaml")))
 def test_the_example_manifests_are_valid(path):
     assert _errors(_load(path)) == []
