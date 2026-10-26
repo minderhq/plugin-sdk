@@ -1,0 +1,39 @@
+{
+  "body_b64": "eyJudW1Gb3VuZCI6NDgzMDgsInN0YXJ0IjowLCJudW1Gb3VuZEV4YWN0Ijp0cnVlLCJudW1fZm91bmQiOjQ4MzA4LCJkb2N1bWVudGF0aW9uX3VybCI6Imh0dHBzOi8vb3BlbmxpYnJhcnkub3JnL2Rldi9kb2NzL2FwaS9zZWFyY2giLCJxIjoiZHVuZSIsIm9mZnNldCI6bnVsbCwiZG9jcyI6W3siYXV0aG9yX25hbWUiOlsiRnJhbmsgSGVyYmVydCJdLCJmaXJzdF9wdWJsaXNoX3llYXIiOjE5NjUsImtleSI6Ii93b3Jrcy9PTDg5MzQxNFciLCJ0aXRsZSI6IkR1bmUifSx7ImF1dGhvcl9uYW1lIjpbIkZyYW5rIEhlcmJlcnQiXSwiZmlyc3RfcHVibGlzaF95ZWFyIjoxOTY5LCJrZXkiOiIvd29ya3MvT0w4OTM0NjFXIiwidGl0bGUiOiJEdW5lIE1lc3NpYWgifV19",
+  "headers": [
+    [
+      "server",
+      "nginx/1.30.6"
+    ],
+    [
+      "date",
+      "Mon, 26 Oct 2026 21:29:06 GMT"
+    ],
+    [
+      "content-type",
+      "application/json"
+    ],
+    [
+      "vary",
+      "Origin"
+    ],
+    [
+      "x-served-by",
+      "FastAPI"
+    ],
+    [
+      "server-timing",
+      "total;dur=521.0, solr;dur=437.6;desc=\"1 call\""
+    ],
+    [
+      "referrer-policy",
+      "no-referrer-when-downgrade"
+    ]
+  ],
+  "request": {
+    "host": "openlibrary.org",
+    "method": "GET",
+    "target": "/search.json?q=dune&limit=2&fields=title%2Cauthor_name%2Cfirst_publish_year%2Ckey"
+  },
+  "status": 200
+}

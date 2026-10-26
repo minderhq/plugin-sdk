@@ -1,0 +1,22 @@
+{
+  "query": "dune",
+  "count": 2,
+  "books": [
+    {
+      "title": "Dune",
+      "authors": [
+        "Frank Herbert"
+      ],
+      "first_published": 1965,
+      "url": "https://openlibrary.org/works/OL893414W"
+    },
+    {
+      "title": "Dune Messiah",
+      "authors": [
+        "Frank Herbert"
+      ],
+      "first_published": 1969,
+      "url": "https://openlibrary.org/works/OL893461W"
+    }
+  ]
+}

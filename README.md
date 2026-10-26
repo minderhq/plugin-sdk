@@ -350,6 +350,33 @@ It records every call in `ctx.calls` with identifying arguments only (secret
 `ctx.called("secrets.read")`), and keeps side effects in `ctx.indexed`,
 `ctx.telegraf_region`, `ctx.telegraf_reloads` and `ctx.timeseries_lines`.
 
+## Declarative (T0) plugins: `minder-plugin try`
+
+A declarative plugin is a manifest, not code: HTTP requests on declared hosts,
+engine-injected auth, JMESPath / XML mapping, pagination and chaining. Minder's
+declarative runner executes it with the **`minder_t0_engine`** package, which
+ships with this SDK. `minder-plugin try` uses the same engine and the same
+egress rules, so what you see locally is what the runner produces.
+
+```bash
+pip install 'minder-plugin-sdk[t0]'
+
+# live: real DNS and upstream calls, under the manifest's egress rules
+minder-plugin try manifest.yml convert --args '{"amount": 10, "from_currency": "EUR", "to_currency": "TRY"}'
+
+# record upstream responses, then iterate offline
+minder-plugin try manifest.yml convert --args '...' --record fixtures/
+minder-plugin try manifest.yml convert --args '...' --replay fixtures/
+```
+
+- `--config '{...}'` sets config values; `--secret KEY=VALUE` (repeatable)
+  provides an auth secret the manifest injects.
+- Replay never touches the network: a request that was not recorded fails.
+  Host, scheme, path and redirect rules still apply offline. Address checks
+  (private / metadata IPs) need DNS, so they run in live and record mode only.
+- Recordings keep response headers except cookies and hop-by-hop headers;
+  review them before you commit them.
+
 ## Worked example
 
 [`examples/weather_plugin.py`](examples/weather_plugin.py) is a complete,

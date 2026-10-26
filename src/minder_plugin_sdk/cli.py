@@ -269,6 +269,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     sv.add_argument("--path-prefix", default="", help="external path prefix")
     sv.add_argument("--log-level", default="info")
+    tr = sub.add_parser(
+        "try",
+        help="run one operation of a T0 manifest locally (needs the t0 extra)",
+        description=(
+            "Load a declarative (T0) manifest and run one tool or action with "
+            "the runner's own engine and egress rules, then print the mapped "
+            "output. --record saves upstream responses; --replay runs offline "
+            "from them."
+        ),
+    )
+    tr.add_argument("manifest", help="manifest.yaml or .json")
+    tr.add_argument("operation", help="the tool or action name")
+    tr.add_argument("--args", default=None, help="parameters as a JSON object")
+    tr.add_argument("--config", default=None, help="config values as a JSON object")
+    tr.add_argument(
+        "--secret",
+        action="append",
+        metavar="KEY=VALUE",
+        help="an auth secret the manifest injects (repeatable)",
+    )
+    mode = tr.add_mutually_exclusive_group()
+    mode.add_argument("--record", metavar="DIR", default=None)
+    mode.add_argument("--replay", metavar="DIR", default=None)
 
     args = parser.parse_args(argv)
     if args.cmd == "validate":
@@ -279,6 +302,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _cmd_scaffold(args.name, args.out)
     if args.cmd == "serve":
         return _cmd_serve(args)
+    if args.cmd == "try":
+        from .t0_try import cmd_try
+
+        return cmd_try(args)
     return 2  # pragma: no cover
 
 
