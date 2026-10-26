@@ -1,0 +1,35 @@
+{
+  "body_b64": "UGxlYXNlIHJlc3BlY3Qgb3VyIHJvYm90IHBvbGljeSBodHRwczovL3cud2lraS80d0pTIHdoZW4gY3Jhd2xpbmcgdXMuIENvbnRhY3QgYm90LXRyYWZmaWNAd2lraW1lZGlhLm9yZyBpZiB5b3UgbmVlZCBoaWdoZXIgdm9sdW1lcy4gKDMwMjI0YmIp",
+  "headers": [
+    [
+      "content-type",
+      "text/plain"
+    ],
+    [
+      "x-request-id",
+      "c9d1724b-8bc8-4276-9d3a-e0db45ae75d5"
+    ],
+    [
+      "server",
+      "HAProxy"
+    ],
+    [
+      "x-cache",
+      "cp6015 int"
+    ],
+    [
+      "x-cache-status",
+      "int-tls"
+    ],
+    [
+      "x-analytics",
+      ""
+    ]
+  ],
+  "request": {
+    "host": "en.wikipedia.org",
+    "method": "GET",
+    "target": "/api/rest_v1/page/summary/Ada_Lovelace"
+  },
+  "status": 403
+}

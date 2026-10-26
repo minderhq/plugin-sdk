@@ -1,0 +1,6 @@
+{
+  "wikipedia": {"operation": "wiki_summary", "args": {"topic": "Ada Lovelace"}},
+  "openlibrary": {"operation": "search_books", "args": {"query": "dune", "max_results": 2}},
+  "arxiv": {"operation": "search_papers", "args": {"query": "retrieval augmented generation", "max_results": 2}},
+  "frankfurter": {"operation": "convert", "args": {"amount": 10, "from_currency": "EUR", "to_currency": "TRY"}}
+}

@@ -1,0 +1,67 @@
+{
+  "body_b64": "eyJhbW91bnQiOjEuMCwiYmFzZSI6IkVVUiIsImRhdGUiOiIyMDI2LTEwLTI2IiwicmF0ZXMiOnsiVFJZIjo1NS42NzQ2fX0=",
+  "headers": [
+    [
+      "date",
+      "Mon, 26 Oct 2026 21:29:08 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "cache-control",
+      "public, max-age=86400"
+    ],
+    [
+      "report-to",
+      "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=%2BYPDBCMmum8HxzOt4N7dHiOJ5a7TDGwQav8ZW2OcA2l9s0i6ZTJbWSKQJkh1S3EfZZ8ggdbVxNMWbvZgTO20n6W38Pm8XA9GWQ6qfzxkDkmD%2FU1LRSsT4JhIlpAgeR2PRY%2BQvuM%3D\"}]}"
+    ],
+    [
+      "vary",
+      "Origin"
+    ],
+    [
+      "x-robots-tag",
+      "noindex"
+    ],
+    [
+      "deprecation",
+      "@1779103800"
+    ],
+    [
+      "link",
+      "<https://api.frankfurter.dev/v2/rates>; rel=\"successor-version\""
+    ],
+    [
+      "age",
+      "1380"
+    ],
+    [
+      "etag",
+      "W/\"dbcd70beab56963578d70df985879ec7\""
+    ],
+    [
+      "cf-cache-status",
+      "HIT"
+    ],
+    [
+      "nel",
+      "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}"
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "cf-ray",
+      "a50c8e061c531ca3-FRA"
+    ]
+  ],
+  "request": {
+    "host": "api.frankfurter.dev",
+    "method": "GET",
+    "target": "/v1/latest?from=EUR&to=TRY"
+  },
+  "status": 200
+}

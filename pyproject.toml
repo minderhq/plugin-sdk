@@ -36,8 +36,19 @@ serve = [
     "cryptography>=42",
     "httpx>=0.27",
 ]
+# `minder-plugin try` and the minder_t0_engine package (the T0 declarative
+# connector engine the runner uses).
+t0 = [
+    "httpx>=0.27",
+    "jmespath>=1.0",
+    "defusedxml>=0.7",
+    "pydantic>=2",
+    "jsonschema>=4",
+    "pyyaml>=6",
+]
 dev = [
     "pytest>=8",
+    "pytest-asyncio>=0.23",
     "mypy>=1.8",
     "black>=24",
     "flake8>=7",
@@ -49,6 +60,11 @@ dev = [
     "starlette>=0.37",
     "uvicorn>=0.29",
     "cryptography>=42",
+    "jmespath>=1.0",
+    "defusedxml>=0.7",
+    "pydantic>=2",
+    "types-jmespath",
+    "types-defusedxml",
 ]
 
 [project.scripts]
@@ -64,6 +80,10 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 minder_plugin_sdk = ["py.typed", "schemas/*.json"]
+minder_t0_engine = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.black]
 line-length = 88

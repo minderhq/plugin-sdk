@@ -5,6 +5,15 @@ evolve; changes are additive and backwards-compatible where possible.
 
 ## [Unreleased]
 
+### `minder_t0_engine` and `minder-plugin try`
+- New package `minder_t0_engine`: the T0 declarative connector engine that
+  Minder's declarative runner uses (manifest model, placeholders, JMESPath /
+  XML mapping, pagination, per-plugin egress with IP pinning, and the shared
+  egress policy). Install with the new `t0` extra.
+- New `minder-plugin try MANIFEST OPERATION`: runs one tool or action with
+  that engine and prints the mapped output. `--record DIR` saves upstream
+  responses; `--replay DIR` runs offline from them.
+
 ### Manifest schemas
 The bundled schemas are now the single source of the manifest contract; Minder
 validates against the same files.

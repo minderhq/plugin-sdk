@@ -1,0 +1,3 @@
+^src/minder_t0_engine/egress_policy\.py:.*(100\.64\.0\.0/10|100\.100\.100\.200)  # SSRF blocklist constants and their docs: CGNAT and the Alibaba metadata address the T0 egress policy refuses
+^tests/test_t0_egress_policy\.py:.*(100\.64\.|100\.100\.100\.200|tail1234\.ts\.net)  # SSRF test inputs the egress policy must refuse
+^tests/test_t0_engine\.py:.*(100\.64\.0\.1|100\.100\.100\.200|peer\.ts\.net)  # SSRF test inputs the T0 engine must refuse
