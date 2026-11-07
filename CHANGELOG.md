@@ -5,6 +5,22 @@ evolve; changes are additive and backwards-compatible where possible.
 
 ## [Unreleased]
 
+### T0 `minder_api` step
+Additive.
+- A declarative step may be `minder_api: {route, method, query, body}`
+  instead of `request`. It calls Minder's own API through the invocation's
+  `ctx.minder` (capability `minder.api`) and is not egress. Its parsed answer
+  is the step's result, as with an HTTP step (`select`, `when`, `foreach`,
+  `steps.<name>`). It counts toward the per-invocation request cap.
+- Only a tool that declares `minder_scopes` (new on a declarative tool,
+  from `context.MINDER_SCOPES`) can use it. The route must start with `/v1/`
+  and the method must be GET or POST, with a body on POST only. Actions, the
+  schedule and tools without `minder_scopes` are refused at load.
+- `minder_t0_engine.Invocation` gains `minder` (the `ctx.minder` handle).
+  Without it a `minder_api` step raises `CapabilityDenied`. `Operation`
+  gains `minder_scopes`. The declarative schema gains the `minderApi`
+  definition, `step.minder_api` and `operation.minder_scopes`.
+
 ### `ctx.minder`: Minder's own API for AI tools
 Additive.
 - `await ctx.minder.call(route, *, method="GET", query=None, json=None)` calls

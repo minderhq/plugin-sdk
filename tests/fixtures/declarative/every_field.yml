@@ -81,6 +81,23 @@ spec:
       output: "{hits: steps.hits, detail: steps.detail}"
       error_output: "{error: error.kind}"
       on_error: {error: unavailable}
+    passages:
+      description: Search a knowledge base through Minder's own API.
+      effect: read
+      minder_scopes: [kb.search]
+      parameters:
+        type: object
+        properties:
+          kb: {type: string}
+          q: {type: string}
+      steps:
+        - name: hits
+          minder_api:
+            route: "/v1/knowledge-bases/{params.kb}/search"
+            method: POST
+            query: {limit: 5}
+            body: {query: "{params.q}"}
+          select: results
   actions:
     ingest:
       description: Store a delivered event.

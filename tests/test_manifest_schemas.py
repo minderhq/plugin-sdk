@@ -213,6 +213,7 @@ def _mutate(path: str, value: Any = None, delete: bool = False) -> Dict[str, Any
         "spec.tools.search.steps.0.extra",
         "spec.tools.search.steps.0.request.extra",
         "spec.tools.search.steps.0.request.paginate.extra",
+        "spec.tools.passages.steps.0.minder_api.extra",
         "spec.actions.ingest.steps.0.request.body.extra",
         "spec.actions.feed.steps.0.request.xml.extra",
         "spec.actions.feed.timeseries.extra",
@@ -241,6 +242,8 @@ def test_unknown_fields_are_refused_at_every_level(path):
         "spec.tools.search.steps.0.name",
         "spec.tools.search.steps.0.request",
         "spec.tools.search.steps.0.request.base",
+        "spec.tools.passages.steps.0.minder_api",
+        "spec.tools.passages.steps.0.minder_api.route",
         "spec.tools.search.steps.0.request.paginate.type",
         "spec.actions.feed.timeseries.points",
         "spec.schedule.steps",
@@ -272,6 +275,14 @@ def test_required_fields_are_required(path):
         ("spec.tools.search.steps.0.request.paginate.max_pages", 11),
         ("spec.tools.search.steps.0.request.query", {"q": ["a"]}),
         ("spec.tools.search.effect", "maybe"),
+        ("spec.tools.passages.steps.0.minder_api.method", "PUT"),
+        ("spec.tools.passages.steps.0.minder_api.route", "/api/v1/x"),
+        ("spec.tools.passages.steps.0.minder_api.route", "https://h/v1/x"),
+        ("spec.tools.passages.steps.0.minder_api.route", "/v1/x?y=1"),
+        ("spec.tools.passages.steps.0.minder_api.query", {"q": ["a"]}),
+        ("spec.tools.passages.minder_scopes", ["kb.nope"]),
+        ("spec.tools.passages.minder_scopes", ["kb.search", "kb.search"]),
+        ("spec.tools.passages.minder_scopes", "kb.search"),
         ("spec.tools.search.parameters", {"type": "array"}),
         ("spec.tools.search.description", ""),
         ("spec.tools.search.steps.0.name", "Bad-Name"),
@@ -307,6 +318,24 @@ def test_a_tool_cannot_write_time_series_and_an_action_has_no_effect():
     assert _errors(manifest)
 
 
+def test_a_step_is_a_request_or_a_minder_api_call_and_only_tools_call_minder():
+    manifest = _load(EVERY_FIELD)
+    step = manifest["spec"]["tools"]["passages"]["steps"][0]
+    both = copy.deepcopy(manifest)
+    both["spec"]["tools"]["passages"]["steps"][0]["request"] = {"base": "api"}
+    assert _errors(both)
+    for key in ("actions.feed", "schedule"):
+        m = copy.deepcopy(manifest)
+        node: Any = m["spec"]
+        for k in key.split("."):
+            node = node[k]
+        node["steps"] = [step]
+        assert _errors(m), key
+    m = copy.deepcopy(manifest)
+    m["spec"]["actions"]["feed"]["minder_scopes"] = ["kb.search"]
+    assert _errors(m)
+
+
 def test_a_connector_needs_a_tool_an_action_or_a_schedule():
     manifest = _load(EVERY_FIELD)
     for key in ("tools", "actions", "schedule", "webhook"):
@@ -326,6 +355,7 @@ def test_optional_fields_accept_null():
         "spec.tools.search.output",
         "spec.tools.search.read_only",
         "spec.tools.search.steps.0.when",
+        "spec.tools.passages.steps.0.minder_api.body",
         "spec.tools.search.steps.0.request.paginate",
         "spec.tools.search.steps.0.request.follow_redirects",
         "spec.schedule.cron",

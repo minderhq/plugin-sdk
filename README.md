@@ -391,6 +391,30 @@ minder-plugin try manifest.yml convert --args '...' --replay fixtures/
 - Recordings keep response headers except cookies and hop-by-hop headers;
   review them before you commit them.
 
+A tool may also call Minder's own API with a `minder_api` step instead of a
+`request`. The tool must declare `minder_scopes`, and the step runs through
+`ctx.minder.call` (capability `minder.api`) as the invoking user. It is not
+egress, so no egress rule applies to it. Its parsed answer is the step's result,
+as with an HTTP step, so `select`, `when`, `foreach` and later steps work the same
+way. Actions and the schedule can't use it. `minder-plugin try` binds no
+`ctx.minder`, so a `minder_api` step is denied there.
+
+```yaml
+tools:
+  passages:
+    description: Search the knowledge base.
+    minder_scopes: [kb.search]
+    parameters: {type: object, properties: {kb: {type: string}, q: {type: string}}}
+    steps:
+      - name: hits
+        minder_api:
+          route: "/v1/knowledge-bases/{params.kb}/search"  # starts with /v1/
+          method: POST                                     # GET (default) or POST
+          query: {limit: 5}
+          body: {query: "{params.q}"}                      # POST only
+        select: results
+```
+
 ## Worked example
 
 [`examples/weather_plugin.py`](examples/weather_plugin.py) is a complete,

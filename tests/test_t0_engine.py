@@ -2416,3 +2416,158 @@ async def test_schedule_vars_feed_its_request():
     lines = await engine(data, up).run_schedule(inv({"FX_BASE": " try "}))
     assert up.requests[0].url.params["from"] == "TRY"
     assert lines[0] == "fx_rate,base=TRY,quote=USD rate=1.1"
+
+
+# ── minder_api steps ─────────────────────────────────────────────────────
+
+
+def minder_manifest(**tool_extra: Any) -> Dict:
+    """A tool that reads Minder's own API, then fetches one upstream item."""
+    op = tool(
+        [
+            {
+                "name": "hits",
+                "minder_api": {
+                    "route": "/v1/knowledge-bases/{params.q}/search",
+                    "method": "POST",
+                    "query": {"limit": 5},
+                    "body": {"query": "{params.q}", "fixed": True},
+                },
+                "select": "results[0]",
+            },
+            {
+                "name": "doc",
+                "request": {"base": "api", "path": "/items/{steps.hits.id}"},
+            },
+        ],
+        minder_scopes=["kb.search"],
+        output="{first: steps.hits.title, doc: steps.doc.name}",
+    )
+    op.update(tool_extra)
+    return manifest({"tools": {"passages": op}})
+
+
+async def test_minder_api_step_calls_ctx_minder_and_feeds_later_steps():
+    from minder_plugin_sdk.context import CAP_MINDER_API
+    from minder_plugin_sdk.harness import FakePlatformContext
+
+    seen: List[Dict[str, Any]] = []
+
+    def answer(query: Dict[str, Any], json: Any) -> Any:
+        seen.append({"query": query, "json": json})
+        return {"results": [{"id": "d1", "title": "First"}], "total": 1}
+
+    route = "/v1/knowledge-bases/a%2Fb/search"  # the placeholder is path-encoded
+    ctx = FakePlatformContext(
+        grants={CAP_MINDER_API}, minder_results={("POST", route): answer}
+    )
+    up = Upstream()
+    up.route("api.example.com", "/v1/items/d1", httpx.Response(200, json={"name": "D"}))
+    dns_calls: List[str] = []
+    e = engine(minder_manifest(), up, dns=resolver(calls=dns_calls))
+    m = e.manifest.tools["passages"]
+    assert m.minder_scopes == ("kb.search",)
+    assert m.steps[0].request is None and m.steps[0].minder is not None
+
+    out = await e.run_operation(
+        "passages",
+        {"q": "a/b"},
+        Invocation(config={}, secrets=Secrets(), minder=ctx.minder),
+    )
+    assert out == {"first": "First", "doc": "D"}
+    assert [c.args for c in ctx.called(CAP_MINDER_API)] == [
+        {"route": route, "method": "POST"}
+    ]
+    assert seen == [{"query": {"limit": "5"}, "json": {"query": "a/b", "fixed": True}}]
+    # Only the HTTP step went through egress: the Minder call is not egress.
+    assert dns_calls == ["api.example.com"]
+    assert [r.url.raw_path for r in up.requests] == [b"/v1/items/d1"]
+
+
+async def test_minder_api_step_is_denied_without_the_capability():
+    from minder_plugin_sdk.context import CAP_MINDER_API
+    from minder_plugin_sdk.errors import CapabilityDenied
+    from minder_plugin_sdk.harness import FakePlatformContext
+
+    up = Upstream()
+    e = engine(minder_manifest(), up)
+    denied = FakePlatformContext(grants=set())
+    with pytest.raises(CapabilityDenied):
+        await e.run_operation(
+            "passages",
+            {"q": "x"},
+            Invocation(config={}, secrets=Secrets(), minder=denied.minder),
+        )
+    assert denied.called(CAP_MINDER_API)
+    # No handle bound (not a tool call): denied before anything is sent.
+    with pytest.raises(CapabilityDenied):
+        await e.run_operation("passages", {"q": "x"}, inv())
+    assert up.requests == []
+
+
+def _minder_step(**call: Any) -> Dict[str, Any]:
+    return {"name": "m", "minder_api": {"route": "/v1/me", **call}}
+
+
+@pytest.mark.parametrize(
+    "spec, match",
+    [
+        # a tool without minder_scopes
+        ({"tools": {"t": tool([_minder_step()])}}, "declares minder_scopes"),
+        # an action, even one that lists scopes
+        (
+            {"tools": {}, "actions": {"a": tool([_minder_step()])}},
+            "declares minder_scopes",
+        ),
+        (
+            {"actions": {"a": tool([_minder_step()], minder_scopes=["kb.search"])}},
+            "only an AI tool",
+        ),
+        (
+            {
+                "timeseries": {"measurements": ["m1"]},
+                "schedule": {
+                    "steps": [_minder_step()],
+                    "measurement": "m1",
+                    "points": "`[]`",
+                },
+            },
+            "declares minder_scopes",
+        ),
+        (
+            {"tools": {"t": tool([_minder_step()], minder_scopes=["kb.nope"])}},
+            "not a Minder scope",
+        ),
+        (
+            {"tools": {"t": tool([_minder_step()], minder_scopes=["kb.search"] * 2)}},
+            "listed twice",
+        ),
+    ],
+)
+def test_minder_api_steps_need_a_tool_with_minder_scopes(spec, match):
+    with pytest.raises(ManifestError, match=match):
+        load_manifest(manifest(spec))
+
+
+@pytest.mark.parametrize(
+    "step, match",
+    [
+        ({"name": "m", "minder_api": {"route": "/api/v1/me"}}, "starting with '/v1/'"),
+        ({"name": "m", "minder_api": {"route": "https://x/v1/me"}}, "'/v1/'"),
+        ({"name": "m", "minder_api": {"route": "/v1/../internal"}}, "'..' segments"),
+        ({"name": "m", "minder_api": {"route": "/v1/me?x=1"}}, "use 'query'"),
+        ({"name": "m", "minder_api": {"route": "/v1/{secret.X}"}}, "placeholder root"),
+        (_minder_step(method="PUT"), "invalid manifest"),
+        (_minder_step(body={"a": 1}), "GET takes no body"),
+        (_minder_step(headers={"a": "b"}), "invalid manifest"),
+        ({"name": "m"}, "exactly one of"),
+        (
+            {**_minder_step(), "request": {"base": "api", "path": "/x"}},
+            "exactly one of",
+        ),
+    ],
+)
+def test_minder_api_route_and_method_are_validated_at_load(step, match):
+    op = tool([step], minder_scopes=["kb.search"])
+    with pytest.raises(ManifestError, match=match):
+        load_manifest(manifest({"tools": {"t": op}}))
