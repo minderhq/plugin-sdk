@@ -37,6 +37,7 @@ def test_unbound_context_conforms_and_has_nothing():
         (lambda c: c.telegraf.set_managed_region("[x]"), "telegraf.set_managed_region"),
         (lambda c: c.telegraf.clear_managed_region(), "telegraf.clear_managed_region"),
         (lambda c: c.telegraf.reload(force=True), "telegraf.reload"),
+        (lambda c: c.minder.call("/v1/x"), "minder.api"),
     ],
 )
 def test_unbound_calls_raise_unavailable(call, capability):

@@ -33,6 +33,7 @@ from typing import (
     Dict,
     FrozenSet,
     Iterable,
+    Mapping,
     Optional,
     Protocol,
     Union,
@@ -48,6 +49,7 @@ __all__ = [
     "DocumentsAPI",
     "TelegrafAPI",
     "TimeseriesAPI",
+    "MinderAPI",
     "UnboundPlatformContext",
     "UNBOUND_CONTEXT",
     "HOST_CAPABILITIES",
@@ -59,6 +61,8 @@ __all__ = [
     "CAP_TELEGRAF_RELOAD",
     "CAP_TIMESERIES_WRITE",
     "CAP_TIMESERIES_LATEST",
+    "CAP_MINDER_API",
+    "MINDER_SCOPES",
     "capability_granted",
 ]
 
@@ -68,7 +72,9 @@ __all__ = [
 # ``PluginMetadata.dependencies`` (plugins.invoke along those edges only),
 # ``REQUIRES`` (e.g. the ``rag`` bundle for documents.index) and ``MANAGES``
 # (``telegraf.*`` for ``MANAGES = ["telegraf"]``) and ``TIMESERIES``
-# (``timeseries.*``, scoped to the declared measurements).
+# (``timeseries.*``, scoped to the declared measurements). ``minder.api`` is
+# granted per call: only to an AI tool call, for the scopes the tool declares
+# in ``minder_scopes`` and the organisation approved.
 CAP_SECRETS_READ = "secrets.read"
 CAP_PLUGINS_INVOKE = "plugins.invoke"
 CAP_DOCUMENTS_INDEX = "documents.index"
@@ -77,6 +83,20 @@ CAP_TELEGRAF_CLEAR_MANAGED_REGION = "telegraf.clear_managed_region"
 CAP_TELEGRAF_RELOAD = "telegraf.reload"
 CAP_TIMESERIES_WRITE = "timeseries.write"
 CAP_TIMESERIES_LATEST = "timeseries.latest"
+CAP_MINDER_API = "minder.api"
+
+#: The Minder API scopes an ``AI_TOOLS`` entry may declare in ``minder_scopes``.
+#: Each plugin-callable Minder route requires one of them.
+MINDER_SCOPES: FrozenSet[str] = frozenset(
+    {
+        "kb.search",
+        "kb.read_passage",
+        "conversation.read_current",
+        "user.profile.basic",
+        "ticket.create_internal",
+        "kb.documents.ingest",
+    }
+)
 
 HOST_CAPABILITIES: FrozenSet[str] = frozenset(
     {
@@ -88,6 +108,7 @@ HOST_CAPABILITIES: FrozenSet[str] = frozenset(
         CAP_TELEGRAF_RELOAD,
         CAP_TIMESERIES_WRITE,
         CAP_TIMESERIES_LATEST,
+        CAP_MINDER_API,
     }
 )
 
@@ -203,6 +224,35 @@ class TimeseriesAPI(Protocol):
 
 
 @runtime_checkable
+class MinderAPI(Protocol):
+    """Minder's own API, for an AI tool call (capability ``minder.api``).
+    Granted only while the plugin serves a chat tool call, and only for the
+    scopes the tool declares in ``minder_scopes`` (and the organisation
+    approved). It acts as the invoking user: Minder applies that user's
+    own access on every call."""
+
+    async def call(
+        self,
+        route: str,
+        *,
+        method: str = "GET",
+        query: Optional[Mapping[str, Union[str, int]]] = None,
+        json: Any = None,
+    ) -> Any:
+        """Call the plugin-callable Minder route ``route`` (a path such as
+        ``/v1/knowledge-bases/<kb>/documents/<doc>/chunks``) and return its
+        parsed JSON answer. ``json`` is the request body (not on ``GET``).
+
+        Raises :class:`CapabilityDenied` when the call is not a tool call,
+        the route is not plugin-callable, the tool's token lacks the route's
+        scope, the deadline has passed, or Minder refuses the call;
+        :class:`CapabilityInvalid` when Minder rejects the arguments;
+        :class:`CapabilityUnavailable` when the route can't be reached or
+        runs past the call's deadline."""
+        ...
+
+
+@runtime_checkable
 class PlatformContext(Protocol):
     """What ``self.ctx`` provides to a contract-v2 plugin."""
 
@@ -220,6 +270,9 @@ class PlatformContext(Protocol):
 
     @property
     def timeseries(self) -> TimeseriesAPI: ...
+
+    @property
+    def minder(self) -> MinderAPI: ...
 
     def has(self, capability: str) -> bool:
         """Whether ``capability`` is granted for this binding (see
@@ -287,6 +340,18 @@ class _UnboundTimeseries:
         raise _unbound(CAP_TIMESERIES_LATEST)
 
 
+class _UnboundMinder:
+    async def call(
+        self,
+        route: str,
+        *,
+        method: str = "GET",
+        query: Optional[Mapping[str, Union[str, int]]] = None,
+        json: Any = None,
+    ) -> Any:
+        raise _unbound(CAP_MINDER_API)
+
+
 class UnboundPlatformContext:
     """The context a plugin sees before (or without) a host binding: every call
     raises :class:`CapabilityUnavailable` and ``has()`` is always ``False``."""
@@ -297,6 +362,7 @@ class UnboundPlatformContext:
         self.documents = _UnboundDocuments()
         self.telegraf = _UnboundTelegraf()
         self.timeseries = _UnboundTimeseries()
+        self.minder = _UnboundMinder()
 
     def has(self, capability: str) -> bool:
         return False

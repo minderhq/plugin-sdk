@@ -167,3 +167,31 @@ def test_for_plugin_derives_grants_from_declarations():
     bare = FakePlatformContext.for_plugin(PluginBase(), dependencies=["telegraf"])
     assert bare.has("plugins.invoke")
     assert not bare.has("telegraf") and not bare.has("documents.index")
+
+
+def test_minder_call_answers_configured_routes_only():
+    seen = {}
+
+    def chunks(query, json):
+        seen.update(query=query, json=json)
+        return [{"text": "x"}]
+
+    ctx = FakePlatformContext(minder_results={("get", "/v1/a"): chunks})
+    assert run(ctx.minder.call("/v1/a", query={"n": 1})) == [{"text": "x"}]
+    assert seen == {"query": {"n": 1}, "json": None}
+    assert [c.args for c in ctx.called("minder.api")] == [
+        {"route": "/v1/a", "method": "GET"}
+    ]
+    with pytest.raises(CapabilityDenied):
+        run(ctx.minder.call("/v1/a", method="POST", json={}))
+
+
+def test_minder_call_needs_the_grant():
+    class P(PluginBase):
+        AI_TOOLS = [{"name": "t", "action": "t", "minder_scopes": ["kb.search"]}]
+
+    assert FakePlatformContext.for_plugin(P()).has("minder.api")
+    ctx = FakePlatformContext.for_plugin(object())
+    assert not ctx.has("minder.api")
+    with pytest.raises(CapabilityDenied):
+        run(ctx.minder.call("/v1/a"))

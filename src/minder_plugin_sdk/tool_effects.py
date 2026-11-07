@@ -36,15 +36,26 @@ classify is treated as ``write``.
     The egress hosts the tool may reach (``api.example.com``, or
     ``*.example.com`` for any subdomain).
 
+``minder_scopes`` (list of str)
+    The Minder API scopes the tool needs for ``ctx.minder.call`` (one of
+    :data:`~minder_plugin_sdk.context.MINDER_SCOPES` each). A tool call's
+    ``minder.api`` grant carries only the declared scopes the organisation
+    approved.
+
 ``check_plugin`` reports invalid values as errors (:func:`tool_effect_errors`);
 :func:`tool_effect_warnings` (via ``check_plugin_warnings``) reports a missing
-``effect`` and a declaration that strong evidence contradicts.
+``effect``, a declaration that strong evidence contradicts, and a tool whose
+action calls ``ctx.minder.call`` without ``minder_scopes``.
 :func:`mcp_annotations` maps an effect to MCP tool annotations.
 """
 
+import ast
+import inspect
 import re
+import textwrap
 from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, TypedDict
 
+from .context import MINDER_SCOPES
 from .declarations import is_host_pattern
 
 __all__ = [
@@ -94,6 +105,7 @@ class AIToolSpec(TypedDict, total=False):
     idempotent: bool
     hosts: List[str]
     sensitivities: Dict[str, str]
+    minder_scopes: List[str]
 
 
 def is_valid_sensitivity(value: Any) -> bool:
@@ -426,13 +438,46 @@ def tool_effect_errors(plugin: Any) -> List[str]:
                             f"tool {name!r} host {host!r} must be a lowercase host "
                             "name or *.domain pattern (no scheme, port or path)"
                         )
+        scopes = tool.get("minder_scopes")
+        if scopes is not None:
+            if not isinstance(scopes, (list, tuple)):
+                errors.append(f"tool {name!r} 'minder_scopes' must be a list of scopes")
+            else:
+                for scope in scopes:
+                    if not isinstance(scope, str) or scope not in MINDER_SCOPES:
+                        errors.append(
+                            f"tool {name!r} minder scope {scope!r} must be one of "
+                            f"{', '.join(sorted(MINDER_SCOPES))}"
+                        )
     return errors
+
+
+def _calls_minder_api(plugin: Any, action: Any) -> bool:
+    """Whether the action method's own code calls ``<...>.minder.call(...)``.
+
+    shortcut: only the action method's body is read, not the helpers it
+    calls; follow calls if plugins start hiding ``ctx.minder`` in helpers."""
+    cls = plugin if isinstance(plugin, type) else type(plugin)
+    method: Any = getattr(cls, action, None) if isinstance(action, str) else None
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
+    except (TypeError, OSError, SyntaxError):
+        return False
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "call"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "minder"
+        for node in ast.walk(tree)
+    )
 
 
 def tool_effect_warnings(plugin: Any) -> List[str]:
     """Non-fatal findings on the plugin's ``AI_TOOLS``: a tool without
-    ``effect``, a sensitivity on an argument the schema doesn't define, and a
-    declared ``effect`` that strong evidence contradicts (evidence stricter
+    ``effect``, a sensitivity on an argument the schema doesn't define, a
+    tool whose action calls ``ctx.minder.call`` without ``minder_scopes``, and
+    a declared ``effect`` that strong evidence contradicts (evidence stricter
     than the declaration, e.g. ``read`` with a ``recipient`` argument, or a
     ``send_*`` / ``delete_*`` tool declared ``read``)."""
     warnings: List[str] = []
@@ -454,6 +499,14 @@ def tool_effect_warnings(plugin: Any) -> List[str]:
                         f"tool {name!r} declares a sensitivity for {arg!r}, "
                         "which is not one of its parameters"
                     )
+        if not tool.get("minder_scopes") and _calls_minder_api(
+            plugin, tool.get("action")
+        ):
+            warnings.append(
+                f"tool {name!r} calls ctx.minder.call but declares no "
+                "'minder_scopes'; its calls will be denied (this becomes an "
+                "error in a later release)"
+            )
         if effect not in _RANK:
             continue
         for signal, evidence in _strong_evidence(tool):
