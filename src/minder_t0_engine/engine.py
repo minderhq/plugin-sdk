@@ -385,9 +385,11 @@ class _Run:
     async def _minder(self, call: MinderCall, ctx: Mapping[str, Any]) -> Any:
         if self.inv.minder is None:
             raise CapabilityDenied(CAP_MINDER_API, "not bound to this invocation")
-        route = render(call.route, ctx, PATH)
-        if not route:
-            raise MappingError("minder_api route is empty")
+        route = render(call.route, ctx, PATH) or ""
+        # The load check again, on the rendered route: an empty value can
+        # still leave an empty segment.
+        if any(seg in ("", ".", "..") for seg in route[1:].split("/")):
+            raise MappingError("minder_api route has an empty, '.' or '..' segment")
         query = self._pairs(call.query, ctx, QUERY)
         body = self._json(call.json_body, ctx) if call.has_json else None
         self.requests += 1

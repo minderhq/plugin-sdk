@@ -11,10 +11,14 @@ Additive.
   instead of `request`. It calls Minder's own API through the invocation's
   `ctx.minder` (capability `minder.api`) and is not egress. Its parsed answer
   is the step's result, as with an HTTP step (`select`, `when`, `foreach`,
-  `steps.<name>`). It counts toward the per-invocation request cap.
+  `steps.<name>`). It counts toward the per-invocation request cap. A
+  `minder_api` result can feed a later `request` step, so the data can reach
+  the plugin's egress hosts. A tool whose plugin declares egress counts as
+  egressing for local-only content.
 - Only a tool that declares `minder_scopes` (new on a declarative tool,
   from `context.MINDER_SCOPES`) can use it. The route must start with `/v1/`
-  and the method must be GET or POST, with a body on POST only. Actions, the
+  and the method must be GET or POST, with a body on POST only (the schema
+  refuses a body on GET too). Actions, the
   schedule and tools without `minder_scopes` are refused at load.
 - `minder_t0_engine.Invocation` gains `minder` (the `ctx.minder` handle).
   Without it a `minder_api` step raises `CapabilityDenied`. `Operation`

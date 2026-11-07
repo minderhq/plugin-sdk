@@ -680,7 +680,21 @@
           "description": "The JSON request body (POST only); string values are placeholders."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "method": {
+            "const": "GET"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "body": {
+            "type": "null"
+          }
+        }
+      }
     },
     "step": {
       "type": "object",

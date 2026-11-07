@@ -399,6 +399,10 @@ as with an HTTP step, so `select`, `when`, `foreach` and later steps work the sa
 way. Actions and the schedule can't use it. `minder-plugin try` binds no
 `ctx.minder`, so a `minder_api` step is denied there.
 
+A `minder_api` result can feed a later `request` step, so the data it reads can
+reach the plugin's egress hosts. Minder therefore treats a tool whose plugin
+declares any egress as egressing when it decides about local-only content.
+
 ```yaml
 tools:
   passages:

@@ -334,6 +334,14 @@ def test_a_step_is_a_request_or_a_minder_api_call_and_only_tools_call_minder():
     m = copy.deepcopy(manifest)
     m["spec"]["actions"]["feed"]["minder_scopes"] = ["kb.search"]
     assert _errors(m)
+    get = copy.deepcopy(manifest)
+    call = get["spec"]["tools"]["passages"]["steps"][0]["minder_api"]
+    call["method"] = "GET"
+    assert _errors(get)  # a body on GET, as the engine refuses
+    del call["method"]  # GET by default
+    assert _errors(get)
+    call["body"] = None
+    assert _errors(get) == []
 
 
 def test_a_connector_needs_a_tool_an_action_or_a_schedule():

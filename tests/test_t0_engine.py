@@ -2505,6 +2505,21 @@ async def test_minder_api_step_is_denied_without_the_capability():
     assert up.requests == []
 
 
+async def test_minder_api_rendered_route_is_rechecked():
+    from minder_plugin_sdk.harness import FakePlatformContext
+
+    ctx = FakePlatformContext()
+    e = engine(minder_manifest(), Upstream())
+    # An empty value leaves an empty segment: refused before any call.
+    with pytest.raises(MappingError, match="segment"):
+        await e.run_operation(
+            "passages",
+            {"q": ""},
+            Invocation(config={}, secrets=Secrets(), minder=ctx.minder),
+        )
+    assert ctx.calls == []
+
+
 def _minder_step(**call: Any) -> Dict[str, Any]:
     return {"name": "m", "minder_api": {"route": "/v1/me", **call}}
 
