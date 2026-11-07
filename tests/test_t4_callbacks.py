@@ -152,6 +152,19 @@ def test_callback_base_path_and_default_port_are_handled():
             {"measurement": "m", "tag_key": "a", "tag_value": "1", "fields": ["v"]},
             {"time": "2026-01-01T00:00:00Z", "fields": {"v": 1}},
         ),
+        (
+            lambda c: c.minder.call(
+                "/v1/kb/k1/items", method="POST", query={"n": 2}, json={"a": 1}
+            ),
+            "minder.api",
+            {
+                "route": "/v1/kb/k1/items",
+                "method": "POST",
+                "query": {"n": 2},
+                "body": {"a": 1},
+            },
+            [{"id": "c1"}],
+        ),
     ],
 )
 def test_each_capability_posts_its_body(call, capability, body, result):

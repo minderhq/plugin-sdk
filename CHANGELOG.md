@@ -5,6 +5,26 @@ evolve; changes are additive and backwards-compatible where possible.
 
 ## [Unreleased]
 
+### `ctx.minder`: Minder's own API for AI tools
+Additive.
+- `await ctx.minder.call(route, *, method="GET", query=None, json=None)` calls
+  a plugin-callable Minder route as the invoking user and returns its parsed
+  JSON. Capability `minder.api` (`CAP_MINDER_API`), granted only while the
+  plugin serves an AI tool call, for the tool's approved scopes. Errors:
+  `CapabilityDenied` (not a tool call, route not plugin-callable, scope
+  missing, deadline passed, refused), `CapabilityInvalid` (rejected
+  arguments), `CapabilityUnavailable` (unreachable, or past the deadline).
+  New `MinderAPI` protocol; `PlatformContext` gains `minder`. The unbound,
+  fake and T4 callback contexts implement it (T4 posts `{"route", "method",
+  "query", "body"}` to `/v1/plugin-callbacks/minder.api`).
+- `AI_TOOLS` entries may declare `minder_scopes`, from the new
+  `context.MINDER_SCOPES`. `check_plugin` fails on a non-list or an unknown
+  scope; `check_plugin_warnings` warns when a tool's action calls
+  `ctx.minder.call` without `minder_scopes` (this becomes an error in a later
+  release).
+- `FakePlatformContext(minder_results={(method, route): ...})`;
+  `for_plugin` grants `minder.api` when a tool declares `minder_scopes`.
+
 ### `minder_t0_engine` and `minder-plugin try`
 - New package `minder_t0_engine`: the T0 declarative connector engine that
   Minder's declarative runner uses (manifest model, placeholders, JMESPath /

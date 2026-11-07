@@ -27,6 +27,8 @@ Request bodies (JSON) and the ``result`` each capability answers with:
 - ``timeseries.write``: ``{"lines": [...], "precision"}``; points written.
 - ``timeseries.latest``: ``{"measurement", "tag_key", "tag_value",
   "fields"}``; as ``ctx.timeseries.latest`` returns.
+- ``minder.api``: ``{"route", "method", "query", "body"}``; the route's
+  parsed JSON answer.
 
 A 2xx answer is ``{"result": ...}``. Errors map to the context's exceptions:
 401/403 to :class:`CapabilityDenied`; 400/404/409/413/422 to
@@ -52,6 +54,7 @@ from typing import (
     Dict,
     FrozenSet,
     Iterable,
+    Mapping,
     Optional,
     Union,
 )
@@ -59,6 +62,7 @@ from urllib.parse import quote, urlsplit
 
 from .context import (
     CAP_DOCUMENTS_INDEX,
+    CAP_MINDER_API,
     CAP_PLUGINS_INVOKE,
     CAP_SECRETS_READ,
     CAP_TELEGRAF_CLEAR_MANAGED_REGION,
@@ -84,6 +88,7 @@ REMOTE_CAPABILITIES: FrozenSet[str] = frozenset(
         CAP_DOCUMENTS_INDEX,
         CAP_TIMESERIES_WRITE,
         CAP_TIMESERIES_LATEST,
+        CAP_MINDER_API,
     }
 )
 
@@ -187,6 +192,29 @@ class _Timeseries:
         return result
 
 
+class _Minder:
+    def __init__(self, ctx: "CallbackPlatformContext") -> None:
+        self._ctx = ctx
+
+    async def call(
+        self,
+        route: str,
+        *,
+        method: str = "GET",
+        query: Optional[Mapping[str, Union[str, int]]] = None,
+        json: Any = None,
+    ) -> Any:
+        return await self._ctx.call(
+            CAP_MINDER_API,
+            {
+                "route": route,
+                "method": method,
+                "query": None if query is None else dict(query),
+                "body": json,
+            },
+        )
+
+
 def _as_dict(capability: str, value: Any) -> Dict[str, Any]:
     if not isinstance(value, dict):
         raise CapabilityUnavailable(capability, "unexpected response")
@@ -246,6 +274,7 @@ class CallbackPlatformContext:
         self.documents = _Documents(self)
         self.telegraf = _Telegraf()
         self.timeseries = _Timeseries(self)
+        self.minder = _Minder(self)
 
     def has(self, capability: str) -> bool:
         if not capability_granted(REMOTE_CAPABILITIES, capability):

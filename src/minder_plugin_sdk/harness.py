@@ -32,6 +32,7 @@ from .ai_tools import ai_tool_errors, ai_tool_warnings
 from .capabilities import capabilities
 from .context import (
     CAP_DOCUMENTS_INDEX,
+    CAP_MINDER_API,
     CAP_PLUGINS_INVOKE,
     CAP_SECRETS_READ,
     CAP_TELEGRAF_CLEAR_MANAGED_REGION,
@@ -133,10 +134,11 @@ def check_plugin(plugin: Any) -> List[str]:
 
 def check_plugin_warnings(plugin: Any) -> List[str]:
     """Non-fatal findings that :func:`check_plugin` does not fail on. Empty ⇒
-    nothing to report. Today: ``AI_TOOLS`` entries without an ``effect``, and
-    declared effects that the tool's name, method or arguments contradict
-    (see ``tool_effects``). A missing ``effect`` may become an error in a
-    later release."""
+    nothing to report. Today: ``AI_TOOLS`` entries without an ``effect``,
+    declared effects that the tool's name, method or arguments contradict,
+    and tools whose action calls ``ctx.minder.call`` without
+    ``minder_scopes`` (see ``tool_effects``). A missing ``effect`` or
+    ``minder_scopes`` may become an error in a later release."""
     return ai_tool_warnings(plugin)
 
 
@@ -296,6 +298,32 @@ class _FakeTimeseries:
         return {"time": point.get("time"), "fields": {f: values.get(f) for f in wanted}}
 
 
+class _FakeMinder:
+    def __init__(self, fake: "FakePlatformContext") -> None:
+        self._fake = fake
+
+    async def call(
+        self,
+        route: str,
+        *,
+        method: str = "GET",
+        query: Optional[Mapping[str, Union[str, int]]] = None,
+        json: Any = None,
+    ) -> Any:
+        method = method.upper()
+        self._fake._enter(CAP_MINDER_API, {"route": route, "method": method})
+        key = (method, route)
+        if key not in self._fake.minder_results:
+            raise CapabilityDenied(
+                CAP_MINDER_API, f"no fake answer for {method} {route}"
+            )
+        handler = self._fake.minder_results[key]
+        if callable(handler):
+            result = handler(query=dict(query or {}), json=json)
+            return await result if inspect.isawaitable(result) else result
+        return handler
+
+
 class FakePlatformContext:
     """An in-memory :class:`~minder_plugin_sdk.context.PlatformContext` for
     plugin unit tests: no platform needed.
@@ -317,6 +345,10 @@ class FakePlatformContext:
     * ``timeseries_latest``: ``{(measurement, tag_key, tag_value): point}`` for
       ``ctx.timeseries.latest``, where a point is an ISO timestamp or
       ``{"time": ..., "fields": {...}}``; an unknown series returns ``None``.
+    * ``minder_results``: ``{(method, route): value-or-callable}`` for
+      ``ctx.minder.call``; a callable gets ``query=`` and ``json=`` (may be
+      async). Any other route raises ``CapabilityDenied``, as Minder refuses
+      a route that is not plugin-callable. The fake does not check scopes.
 
     Every call (allowed or not) is appended to ``calls``. Side effects are kept
     in ``indexed`` (documents, with content), ``telegraf_region``,
@@ -338,6 +370,7 @@ class FakePlatformContext:
         timeseries_latest: Optional[
             Mapping[Tuple[str, str, str], Union[str, Dict[str, Any]]]
         ] = None,
+        minder_results: Optional[Mapping[Tuple[str, str], InvokeHandler]] = None,
     ) -> None:
         self.secrets_store: Dict[str, str] = dict(secrets or {})
         self.grants: Optional[Set[str]] = None if grants is None else set(grants)
@@ -355,11 +388,15 @@ class FakePlatformContext:
             Tuple[str, str, str], Union[str, Dict[str, Any]]
         ] = dict(timeseries_latest or {})
         self.timeseries_lines: List[str] = []
+        self.minder_results: Dict[Tuple[str, str], InvokeHandler] = {
+            (m.upper(), r): v for (m, r), v in (minder_results or {}).items()
+        }
         self.secrets = _FakeSecrets(self)
         self.plugins = _FakePlugins(self)
         self.documents = _FakeDocuments(self)
         self.telegraf = _FakeTelegraf(self)
         self.timeseries = _FakeTimeseries(self)
+        self.minder = _FakeMinder(self)
 
     @classmethod
     def for_plugin(
@@ -377,7 +414,9 @@ class FakePlatformContext:
         * ``documents.index`` when ``REQUIRES`` lists the ``rag`` bundle;
         * ``<name>.*`` for each name in ``MANAGES``;
         * ``timeseries.*`` when ``TIMESERIES`` is declared (the platform also
-          limits writes to the declared measurements; this fake does not).
+          limits writes to the declared measurements; this fake does not);
+        * ``minder.api`` when an ``AI_TOOLS`` entry declares ``minder_scopes``
+          (the platform grants it per tool call only).
 
         Other keyword arguments are passed to the constructor."""
         grants = {CAP_SECRETS_READ}
@@ -390,6 +429,11 @@ class FakePlatformContext:
             grants.add(f"{name}.*")
         if getattr(plugin, "TIMESERIES", None) is not None:
             grants.add("timeseries.*")
+        if any(
+            isinstance(t, dict) and t.get("minder_scopes")
+            for t in getattr(plugin, "AI_TOOLS", None) or []
+        ):
+            grants.add(CAP_MINDER_API)
         return cls(grants=grants, **kwargs)
 
     def has(self, capability: str) -> bool:

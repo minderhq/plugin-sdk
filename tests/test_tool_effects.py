@@ -64,6 +64,10 @@ def _props(*names: str, **sensitivities: str) -> Dict[str, Any]:
         ({"hosts": ["https://api.example.com"]}, ["host 'https://api.example.com'"]),
         ({"hosts": ["api.example.com:443"]}, ["host 'api.example.com:443'"]),
         ({"hosts": ["*.com"]}, ["host '*.com'"]),
+        ({"minder_scopes": ["kb.read_passage", "kb.search"]}, []),
+        ({"minder_scopes": "kb.search"}, ["'minder_scopes' must be a list"]),
+        ({"minder_scopes": ["kb.admin"]}, ["minder scope 'kb.admin' must be one of"]),
+        ({"minder_scopes": [{"x": 1}]}, ["minder scope {'x': 1} must be one of"]),
     ],
 )
 def test_effect_errors(tool: Dict[str, Any], expected: List[str]) -> None:
@@ -285,3 +289,40 @@ def test_build_tool_definitions_strips_sensitivity() -> None:
     }
     # The plugin's own declaration is left untouched.
     assert params["properties"]["to"]["sensitivity"] == "recipient"
+
+
+# ── minder_scopes: a tool that calls ctx.minder.call must declare them ───────
+class _MinderCaller(PluginBase):
+    ACTIONS = frozenset({"read_passage"})
+    AI_TOOLS: List[Dict[str, Any]] = [
+        {"name": "read_passage", "action": "read_passage", "effect": "read"}
+    ]
+
+    async def register(self) -> PluginMetadata:
+        return PluginMetadata(name="p", version="1", description="d", author="a")
+
+    async def read_passage(self, kb_id: str, doc_id: str) -> Any:
+        return await self.ctx.minder.call(
+            f"/v1/knowledge-bases/{kb_id}/documents/{doc_id}/chunks"
+        )
+
+
+def test_minder_call_without_scopes_is_a_warning_not_an_error() -> None:
+    plugin = _MinderCaller()
+    assert check_plugin(plugin) == []
+    warnings = check_plugin_warnings(plugin)
+    assert len(warnings) == 1
+    assert "'read_passage' calls ctx.minder.call" in warnings[0]
+    assert "error in a later release" in warnings[0]
+
+
+def test_minder_call_with_scopes_is_clean() -> None:
+    class Declared(_MinderCaller):
+        AI_TOOLS = [{**_MinderCaller.AI_TOOLS[0], "minder_scopes": ["kb.read_passage"]}]
+
+    assert check_plugin(Declared()) == []
+    assert check_plugin_warnings(Declared()) == []
+
+
+def test_tool_without_minder_call_needs_no_scopes() -> None:
+    assert check_plugin_warnings(_plugin(effect="read")) == []

@@ -99,10 +99,12 @@ AI_TOOLS = [
 | `idempotent` | Optional `bool`: calling it twice with the same arguments has the same effect as once. |
 | `sensitivity` (per argument, in `parameters.properties`) | `recipient`, `url`, `amount`, `free_text`, or `bound:<attr>` (the value must equal the current user's attribute, e.g. `bound:email`). Removed from the schema the model sees. A tool-level `sensitivities: {"<arg>": "<value>"}` map also works. |
 | `hosts` | Optional list of egress hosts the tool may reach (`api.example.com`, `*.example.com`). |
+| `minder_scopes` | The Minder API scopes the tool needs for `ctx.minder.call` (see below), from `context.MINDER_SCOPES`: `kb.search`, `kb.read_passage`, `conversation.read_current`, `user.profile.basic`, `ticket.create_internal`, `kb.documents.ingest`. A tool call carries only the declared scopes the organisation approved. |
 
 All fields are optional in this release, so existing plugins keep loading.
 `check_plugin` fails on an invalid value (an unknown `effect`, a non-bool
-`idempotent`, an unknown sensitivity, a malformed host).
+`idempotent`, an unknown sensitivity, a malformed host, a scope outside
+`MINDER_SCOPES`).
 `check_plugin_warnings` (printed as `WARN` by `minder-plugin validate`, which
 still passes) reports:
 
@@ -114,7 +116,11 @@ still passes) reports:
   `method`, a recipient-like argument (`to`, `recipient`, `cc`, `bcc`,
   `webhook_url`, ...) or a `recipient` sensitivity. For example a `read` tool
   with a `to` argument, or `delete_note` declared `read`. Minder flags the same
-  contradictions and does not trust such a declaration.
+  contradictions and does not trust such a declaration;
+- a tool whose action calls `ctx.minder.call` without declaring
+  `minder_scopes` (its calls would be denied). Only the action method's own
+  body is checked, not helpers it calls. This becomes an error in a later
+  release.
 
 `mcp_annotations(effect, idempotent)` (or `tool_annotations(tool)`) maps an
 effect to MCP tool annotations, for plugins that also serve their tools over MCP:
@@ -236,13 +242,17 @@ class CrawlerPlugin(PluginBase):
 | `await ctx.documents.index(kb_id, filename, content, content_type)` | `documents.index` | Uploads on behalf of the invoking user. |
 | `await ctx.telegraf.set_managed_region(toml)` / `clear_managed_region()` / `reload(force=False)` | `telegraf.*` | Only for plugins with `MANAGES = ["telegraf"]`. The platform validates the TOML (allowlisted inputs, size caps) and writes it atomically. |
 | `await ctx.timeseries.write(lines, precision="s")` / `latest(measurement, tag_key, tag_value, fields=None)` | `timeseries.*` | Only for plugins that declare `TIMESERIES`, and only for the declared measurements. The platform sets the owner and plugin tags. `latest` returns the newest timestamp (or `None`), or `{"time", "fields"}` when `fields` is given. The `write_history` / `latest_influx_date` helpers use it when you pass `ctx=self.ctx`. |
+| `await ctx.minder.call(route, *, method="GET", query=None, json=None)` | `minder.api` | Calls a plugin-callable Minder route (e.g. `/v1/knowledge-bases/<kb>/documents/<doc>/chunks`) as the invoking user and returns its parsed JSON. Granted only while serving an AI tool call, for the tool's approved `minder_scopes`. `json` is the request body (not on `GET`). |
 | `ctx.has(capability)` | — | Whether a capability is granted (`"telegraf"` matches any `telegraf.*`). |
 
 **Errors** (all subclasses of `PluginError`; messages name the capability and a
 reason, never the secret or payload):
 
 - `CapabilityDenied`: not granted for this invocation (undeclared, wrong
-  owner/tenant, expired, undeclared plugin edge). Retrying won't help.
+  owner/tenant, expired, undeclared plugin edge). Retrying won't help. For
+  `ctx.minder.call` the reason says which: not an AI tool call, not a
+  plugin-callable route, the token lacks the route's scope, the deadline has
+  passed, or the route refused the call.
 - `CapabilityUnavailable`: cannot be served right now. This is also what an
   **unbound** context raises (a contract-v1 host, or a test without a fake), so
   catch it to degrade cleanly.
@@ -344,6 +354,10 @@ def test_secret_denied():
   rejected region.
 - `timeseries_latest`: `{(measurement, tag_key, tag_value): point}` answers for
   `ctx.timeseries.latest` (an ISO timestamp, or `{"time", "fields"}`).
+- `minder_results`: `{(method, route): value or callable}` answers for
+  `ctx.minder.call` (a callable gets `query=` and `json=`). Other routes raise
+  `CapabilityDenied`. The fake does not check scopes; `for_plugin` grants
+  `minder.api` when a tool declares `minder_scopes`.
 
 It records every call in `ctx.calls` with identifying arguments only (secret
 *keys*, never values; kwarg *names* for invokes; see
