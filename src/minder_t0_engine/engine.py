@@ -22,6 +22,14 @@ is mapped, and the output sees ``timeseries: {measurement, points,
 written}``. The schedule's collect (:meth:`Engine.run_collect`) does the same:
 its result is that object, or its declared ``output`` mapped over the same
 context; its ``error_output`` stands in for a failure like an operation's.
+
+A ``minder_api`` step (only in a tool that declares ``minder_scopes``) calls
+Minder's own API through the invocation's ``minder`` handle (the platform
+context's ``minder.api`` capability), not through the plugin's egress: no
+egress rule, rate or concurrency limit applies, but it counts toward the
+per-invocation request cap. Its parsed answer is the step's result, like an
+HTTP response. Without a bound handle the step raises ``CapabilityDenied``;
+the capability's own errors propagate unchanged.
 """
 
 import asyncio
@@ -48,6 +56,8 @@ from urllib.parse import quote, quote_plus
 import httpx
 from jmespath.parser import ParsedResult
 from minder_plugin_sdk import line_protocol
+from minder_plugin_sdk.context import CAP_MINDER_API
+from minder_plugin_sdk.errors import CapabilityDenied
 
 from .egress import AuthInjection, Fetched, PluginEgress
 from .errors import (
@@ -67,6 +77,7 @@ from .model import (
     MAX_REQUESTS_PER_INVOCATION,
     Base,
     DeclarativeManifest,
+    MinderCall,
     Operation,
     Request,
     Step,
@@ -167,14 +178,30 @@ class TimeseriesSink(Protocol):
     async def write(self, lines: Any, precision: str = "s") -> int: ...
 
 
+class MinderCaller(Protocol):
+    """The platform context's ``minder`` handle (``ctx.minder``), granted for
+    the invoking tool call's scopes."""
+
+    async def call(
+        self,
+        route: str,
+        *,
+        method: str = "GET",
+        query: Optional[Mapping[str, Any]] = None,
+        json: Any = None,
+    ) -> Any: ...
+
+
 @dataclass
 class Invocation:
     """What one call runs with. Built per call; never stored by the engine.
-    ``timeseries`` is where an action's points go (none: nothing written)."""
+    ``timeseries`` is where an action's points go (none: nothing written);
+    ``minder`` is what a ``minder_api`` step calls (none: denied)."""
 
     config: Mapping[str, Any]
     secrets: SecretSource
     timeseries: Optional[TimeseriesSink] = None
+    minder: Optional[MinderCaller] = None
 
 
 def scrub(value: Any, secrets: Iterable[str]) -> Any:
@@ -355,8 +382,29 @@ class _Run:
         )
         return body, fetched
 
+    async def _minder(self, call: MinderCall, ctx: Mapping[str, Any]) -> Any:
+        if self.inv.minder is None:
+            raise CapabilityDenied(CAP_MINDER_API, "not bound to this invocation")
+        route = render(call.route, ctx, PATH) or ""
+        # The load check again, on the rendered route: an empty value can
+        # still leave an empty segment.
+        if any(seg in ("", ".", "..") for seg in route[1:].split("/")):
+            raise MappingError("minder_api route has an empty, '.' or '..' segment")
+        query = self._pairs(call.query, ctx, QUERY)
+        body = self._json(call.json_body, ctx) if call.has_json else None
+        self.requests += 1
+        if self.requests > MAX_REQUESTS_PER_INVOCATION:
+            raise LimitExceeded("requests per invocation")
+        return await self.inv.minder.call(
+            route, method=call.method, query=query or None, json=body
+        )
+
     async def request(self, step: Step, ctx: Mapping[str, Any]) -> Any:
+        if step.minder is not None:
+            data = await self._minder(step.minder, ctx)
+            return search(step.select, data) if step.select is not None else data
         req = step.request
+        assert req is not None  # compile: exactly one of request / minder_api
         url, origin = self._url(req, ctx)
         query = self._pairs(req.query, ctx, QUERY)
         headers = self._pairs(req.headers, ctx, HEADER)

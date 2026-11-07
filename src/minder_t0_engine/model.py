@@ -35,6 +35,8 @@ Shape (YAML)::
           parameters: {type: object, properties: {...}, required: [...]}
           effect: read                     # optional, tools only: read|write|
                                            # send|destructive (tool effect class)
+          minder_scopes: [kb.search]       # optional, tools only: the Minder
+                                           # API scopes its minder_api steps use
           vars:                            # JMESPath over {params, config, now}
             frm: upper(trim(params.from_currency))
             to: upper(trim(params.to_currency))
@@ -49,6 +51,16 @@ Shape (YAML)::
                 # empty_body: null|error, and for response: xml
                 # xml: {namespaces: drop|keep, prefixes: {atom: <uri>}}
               select: rates                # JMESPath over the response
+            # A tool that declares minder_scopes may instead call Minder's
+            # own API through the platform's minder.api capability (not
+            # egress; acting as the invoking user, for the approved scopes):
+            #   - name: passages
+            #     minder_api:
+            #       route: "/v1/knowledge-bases/{params.kb}/search"
+            #       method: POST                # GET (default) or POST
+            #       query: {limit: 5}
+            #       body: {query: "{params.q}"}  # POST only
+            #     select: results
           output: "{result: multiply(params.amount, values(steps.rate)[0])}"
           # On a failure: error_output (JMESPath over {params, config, error}
           # only; never a response or a secret) and, where it yields null,
@@ -97,6 +109,7 @@ from typing import Any, Dict, FrozenSet, List, Literal, Mapping, Optional, Tuple
 from jmespath.parser import ParsedResult
 from jsonschema import Draft7Validator
 from jsonschema.exceptions import SchemaError
+from minder_plugin_sdk.context import MINDER_SCOPES
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .egress_policy import EgressPolicyError, check_host
@@ -256,9 +269,18 @@ class RequestModel(_Model):
     accept_status: List[int] = Field(default_factory=list)
 
 
+class MinderApiModel(_Model):
+    route: str = Field(min_length=4, max_length=2048)
+    method: Literal["GET", "POST"] = "GET"
+    query: Dict[str, Scalar] = Field(default_factory=dict)
+    body: Optional[Any] = None
+
+
 class StepModel(_Model):
     name: str
-    request: RequestModel
+    # Exactly one of the two (checked at compile).
+    request: Optional[RequestModel] = None
+    minder_api: Optional[MinderApiModel] = None
     when: Optional[str] = None
     foreach: Optional[str] = None
     max_items: int = Field(10, ge=1, le=MAX_FANOUT)
@@ -285,6 +307,7 @@ class OperationModel(_Model):
     admin_only: bool = False
     timeseries: Optional[TimeseriesWriteModel] = None
     effect: Optional[Literal["read", "write", "send", "destructive"]] = None
+    minder_scopes: List[str] = Field(default_factory=list)
 
 
 class ScheduleModel(_Model):
@@ -433,15 +456,31 @@ class Request:
 
 
 @dataclass(frozen=True)
+class MinderCall:
+    """A call to Minder's own API (capability ``minder.api``), made through
+    the invocation's platform context rather than the plugin's egress."""
+
+    method: str
+    #: The route path, starting ``/v1/``; placeholders are path-encoded.
+    route: Template
+    query: Tuple[Tuple[str, Template], ...]
+    json_body: Any
+    has_json: bool
+
+
+@dataclass(frozen=True)
 class Step:
     name: str
-    request: Request
+    #: The HTTP request, or None for a ``minder_api`` step.
+    request: Optional[Request]
     foreach: Optional[ParsedResult]
     max_items: int
     select: Optional[ParsedResult]
     #: JMESPath over the context; a falsy result skips the step (its result
     #: is null and no request is made).
     when: Optional[ParsedResult] = None
+    #: A ``minder_api`` step's call (then ``request`` is None).
+    minder: Optional[MinderCall] = None
 
 
 #: Declared values: (name, JMESPath over {params, config, now}), in order.
@@ -479,6 +518,9 @@ class Operation:
     #: A tool's declared effect class, served with its AI tool so the
     #: registry's tool-effect analysis sees the declaration.
     effect: Optional[str] = None
+    #: A tool's declared Minder API scopes, served with its AI tool so the
+    #: platform grants ``minder.api`` for them (and only them).
+    minder_scopes: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -914,6 +956,37 @@ def _request(
     )
 
 
+def _minder_call(raw: MinderApiModel, where: str, scope: _Scope) -> MinderCall:
+    route = raw.route
+    if not route.startswith("/v1/"):
+        raise ManifestError(f"{where}.route: a Minder route starting with '/v1/'")
+    if "?" in route or "#" in route:
+        raise ManifestError(f"{where}.route: use 'query', not '?' in the route")
+    if any(seg in ("", ".", "..") for seg in route[1:].split("/")):
+        raise ManifestError(f"{where}.route: no empty, '.' or '..' segments")
+    route_t = scope.check(parse_template(route, f"{where}.route"), f"{where}.route")
+    query: List[Tuple[str, Template]] = []
+    for key, value in raw.query.items():
+        if not _PARAM_NAME.match(key):
+            raise ManifestError(f"{where}.query: {key!r} is not a valid name")
+        text = value if isinstance(value, str) else literal_text(value)
+        query.append(
+            (key, scope.check(parse_template(text, f"{where}.query.{key}"), where))
+        )
+    has_json = raw.body is not None
+    if has_json and raw.method == "GET":
+        raise ManifestError(f"{where}.body: GET takes no body")
+    return MinderCall(
+        method=raw.method,
+        route=route_t,
+        query=tuple(query),
+        json_body=(
+            _json_templates(raw.body, f"{where}.body", scope) if has_json else None
+        ),
+        has_json=has_json,
+    )
+
+
 def _xml_prefixes(raw: RequestModel, where: str) -> Tuple[Tuple[str, str], ...]:
     """The ``xml`` option, checked: only on an XML response; ``prefixes``
     (prefix -> namespace URI) only with ``namespaces: keep``, each prefix a
@@ -945,7 +1018,10 @@ def _steps(
     where: str,
     bases: Dict[str, Base],
     scope: _Scope,
+    minder: bool = False,
 ) -> Tuple[Step, ...]:
+    """``minder``: whether ``minder_api`` steps are allowed here (a tool that
+    declares ``minder_scopes``)."""
     seen: List[str] = []
     out: List[Step] = []
     for i, raw in enumerate(raws):
@@ -960,10 +1036,25 @@ def _steps(
             item=raw.foreach is not None,
             vars=scope.vars,
         )
+        if (raw.request is None) == (raw.minder_api is None):
+            raise ManifestError(f"{w}: exactly one of 'request' or 'minder_api'")
+        if raw.minder_api is not None and not minder:
+            raise ManifestError(
+                f"{w}.minder_api: only in an AI tool that declares minder_scopes"
+            )
         out.append(
             Step(
                 name=raw.name,
-                request=_request(raw.request, f"{w}.request", bases, step_scope),
+                request=(
+                    _request(raw.request, f"{w}.request", bases, step_scope)
+                    if raw.request is not None
+                    else None
+                ),
+                minder=(
+                    _minder_call(raw.minder_api, f"{w}.minder_api", step_scope)
+                    if raw.minder_api is not None
+                    else None
+                ),
                 foreach=(
                     compile_expr(raw.foreach, f"{w}.foreach")
                     if raw.foreach is not None
@@ -1067,6 +1158,13 @@ def _operation(
         raise ManifestError(f"{where}.effect: only an AI tool declares an effect")
     if raw.effect == "read" and not read_only:
         raise ManifestError(f"{where}.effect: a read tool must be read_only")
+    if raw.minder_scopes and kind != "tool":
+        raise ManifestError(f"{where}.minder_scopes: only an AI tool declares them")
+    for s in raw.minder_scopes:
+        if s not in MINDER_SCOPES:
+            raise ManifestError(f"{where}.minder_scopes: {s!r} is not a Minder scope")
+    if len(set(raw.minder_scopes)) != len(raw.minder_scopes):
+        raise ManifestError(f"{where}.minder_scopes: a scope is listed twice")
     timeseries: Optional[TimeseriesWrite] = None
     if raw.timeseries is not None:
         # A write is a side effect: never from an AI tool or a read-only action.
@@ -1084,7 +1182,7 @@ def _operation(
         description=raw.description,
         parameters=schema,
         validator=Draft7Validator(schema),
-        steps=_steps(raw.steps, where, bases, scope),
+        steps=_steps(raw.steps, where, bases, scope, minder=bool(raw.minder_scopes)),
         output=(
             compile_expr(raw.output, f"{where}.output")
             if raw.output is not None
@@ -1101,6 +1199,7 @@ def _operation(
         timeseries=timeseries,
         vars=variables,
         effect=raw.effect,
+        minder_scopes=tuple(raw.minder_scopes),
     )
 
 

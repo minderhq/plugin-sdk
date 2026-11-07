@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://minderhq.github.io/docs/schemas/declarative-manifest.v1alpha1.json",
   "title": "Minder Declarative Connector Manifest",
-  "description": "A declarative (T0) connector: HTTP tools, actions, a schedule and an inbound webhook expressed as data, run by Minder's connector engine with no plugin code. This schema checks the structure. At load the engine also checks what JSON Schema cannot express: every base host is in the declared egress, placeholders and JMESPath expressions compile, auth fields fit the auth type, step names are unique, measurements are declared, a webhook action exists and takes a 'body' parameter, and at most 32 tools and actions in total.",
+  "description": "A declarative (T0) connector: HTTP tools, actions, a schedule and an inbound webhook expressed as data, run by Minder's connector engine with no plugin code. This schema checks the structure. At load the engine also checks what JSON Schema cannot express: every base host is in the declared egress, placeholders and JMESPath expressions compile, auth fields fit the auth type, step names are unique, a minder_api step appears only in a tool that declares minder_scopes and its route has no empty, '.' or '..' segment, no minder_scopes entry is listed twice, measurements are declared, a webhook action exists and takes a 'body' parameter, and at most 32 tools and actions in total.",
   "type": "object",
   "required": [
     "apiVersion",
@@ -225,12 +225,25 @@
                 "properties": {
                   "effect": {
                     "type": "null"
+                  },
+                  "minder_scopes": {
+                    "maxItems": 0
+                  },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "properties": {
+                        "minder_api": {
+                          "type": "null"
+                        }
+                      }
+                    }
                   }
                 }
               }
             ]
           },
-          "description": "Actions (not exposed as AI tools). An action declares no effect."
+          "description": "Actions (not exposed as AI tools). An action declares no effect, no minder_scopes and no minder_api step."
         },
         "schedule": {
           "anyOf": [
@@ -632,11 +645,61 @@
       },
       "additionalProperties": false
     },
+    "minderApi": {
+      "type": "object",
+      "description": "A call to Minder's own API through the platform's minder.api capability, as the invoking user and for the tool's approved minder_scopes. Not external egress.",
+      "required": [
+        "route"
+      ],
+      "properties": {
+        "route": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 2048,
+          "pattern": "^/v1/[^?#]*$",
+          "description": "A plugin-callable Minder route, starting with '/v1/'; placeholders are path-encoded."
+        },
+        "method": {
+          "enum": [
+            "GET",
+            "POST"
+          ],
+          "default": "GET"
+        },
+        "query": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "body": {
+          "description": "The JSON request body (POST only); string values are placeholders."
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "properties": {
+          "method": {
+            "const": "GET"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "body": {
+            "type": "null"
+          }
+        }
+      }
+    },
     "step": {
       "type": "object",
       "required": [
-        "name",
-        "request"
+        "name"
       ],
       "properties": {
         "name": {
@@ -644,7 +707,24 @@
           "pattern": "^[a-z][a-z0-9_]{0,63}$"
         },
         "request": {
-          "$ref": "#/definitions/request"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/request"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "minder_api": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/minderApi"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "when": {
           "anyOf": [
@@ -686,7 +766,30 @@
           ]
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "request"
+          ],
+          "properties": {
+            "request": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "required": [
+            "minder_api"
+          ],
+          "properties": {
+            "minder_api": {
+              "type": "object"
+            }
+          }
+        }
+      ],
+      "description": "One step: an HTTP 'request' through the plugin's egress, or a 'minder_api' call to Minder's own API (not egress). Exactly one of the two."
     },
     "timeseriesWrite": {
       "type": "object",
@@ -831,6 +934,21 @@
               "type": "null"
             }
           ]
+        },
+        "minder_scopes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "conversation.read_current",
+              "kb.documents.ingest",
+              "kb.read_passage",
+              "kb.search",
+              "ticket.create_internal",
+              "user.profile.basic"
+            ]
+          },
+          "description": "Tools only: the Minder API scopes its minder_api steps use."
         }
       },
       "additionalProperties": false
@@ -872,8 +990,20 @@
           "minItems": 1,
           "maxItems": 3,
           "items": {
-            "$ref": "#/definitions/step"
-          }
+            "allOf": [
+              {
+                "$ref": "#/definitions/step"
+              },
+              {
+                "properties": {
+                  "minder_api": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          },
+          "description": "The schedule's steps; no minder_api step (that is for AI tools only)."
         },
         "measurement": {
           "type": "string",
